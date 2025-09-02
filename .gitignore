@@ -8,16 +8,10 @@ __pycache__/
 
 # Ignore personal and development files
 private*
-solutions* # Whitelist individual files as we go
-solutions/
 dump*
 *largefile*
-pylbm*
 *long.npz
 development.ipynb
-vorticity_animation.mp4
-vortex*timepoints.npz
-von_karman_street.zip
 
 # PyTorch checkpoints
 *.pth.tar
