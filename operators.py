@@ -57,6 +57,20 @@ def invariant_distribution(P, tol=1e-12, max_iter=10_000, fix_dangling=True, see
     return pi
 
 
+def deflated_operator(P, pi):
+    """
+    A deflated operator that removes a trivial mode from a row-stochastic matrix
+
+    Args:
+        P: (N, N) array-like, row-stochastic ideally
+        pi: (N,) np.ndarray, stationary distribution
+
+    Returns:
+        Ptil: (N, N) sparse.csr_matrix, deflated operator
+    """
+    n = P.shape[0]
+    return P - np.outer(np.ones(n), pi)
+
 
 def transition_matrix(seq, vocab_size, tau=1, normalize=True, dtype=float):
     """
@@ -237,4 +251,3 @@ class SymbolicMarkovChain:
         self.P_ = P
         return self
 
-    
