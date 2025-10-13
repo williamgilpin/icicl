@@ -213,3 +213,77 @@ def next_token_empirical_probs_last_and_each_position(
                 probs[m, b] = probs_by_key[j]
 
     return probs, combs
+
+
+def next_token_empirical_probs_custom_comb(
+    corpus: np.ndarray,
+    queries: np.ndarray,
+    combs: List[Tuple[int, ...]],
+    L: int = None,
+) -> Tuple[np.ndarray, List[Tuple[int, ...]]]:
+    """
+    Empirical next-token probabilities for *all* k-gram position subsets
+    (non-consecutive allowed) chosen from the C-length prefix.
+
+    For each subset of positions S ⊂ {0,…,C-1} with |S|=k (0-based indices,
+    where C-1 is the most recent token before the next-token), this computes
+    P(x_{t} | x_{t-C:t-1}[S]) from the corpus and evaluates it for each query.
+
+    Args:
+        corpus (np.ndarray): 1D int array of tokens (vocab size L).
+        queries (np.ndarray): 2D int array of shape (B, C) with query prefixes.
+        combs (List[Tuple[int, ...]]): List of position tuples (in lexicographic order) used
+                   to index the first dimension of probs.
+        L (int): Vocabulary size (tokens in [0, L-1]).
+
+    Returns:
+        (np.ndarray, List[Tuple[int,...]]):
+            probs: float array of shape (M, B, L), where M = comb(C, k).
+                   probs[m, b] is the empirical distribution over next token
+                   for query b using the position subset combs[m].
+                   If a k-gram was unseen in the corpus, that row is np.nan.
+            combs: list of the position tuples (in lexicographic order) used
+                   to index the first dimension of probs.
+
+    Raises:
+        ValueError: On invalid inputs.
+    """
+    if queries.ndim != 2:
+        raise ValueError("queries must be a 2D array (B, C).")
+    if corpus.ndim != 1:
+        raise ValueError("corpus must be a 1D array.")
+    B, C = queries.shape
+
+    if L is None:
+        L = len(np.unique(corpus))
+
+    w = sliding_window_view(corpus, C + 1)        # shape: (N - C, C+1)
+    past = w[:, :C]                                # (N - C, C)
+    nxt  = w[:, -1]                                # (N - C,)
+
+    probs = np.full((len(combs), B, L), np.nan, dtype=float)
+
+    # For each position subset, build an empirical model from the corpus and evaluate on queries
+    for m, comb in enumerate(combs):
+        ctx = past[:, comb]                        # (N - C, k)
+
+        # Deduplicate the observed k-grams and count next tokens
+        keys, inv = np.unique(ctx, axis=0, return_inverse=True)  # keys: (M_k, k)
+        counts = np.zeros((keys.shape[0], L), dtype=np.int64)
+        np.add.at(counts, (inv, nxt), 1)
+
+        totals = counts.sum(axis=1, keepdims=True)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            probs_by_key = counts / totals
+
+        # Fast lookup dict for query contexts
+        key_map = {tuple(row): i for i, row in enumerate(keys)}
+
+        # Evaluate each query prefix under this subset
+        qctx = queries[:, comb]                    # (B, k)
+        for b in range(B):
+            idx = key_map.get(tuple(qctx[b]))
+            if idx is not None and totals[idx, 0] > 0:
+                probs[m, b] = probs_by_key[idx]
+
+    return np.array(probs), combs
