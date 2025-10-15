@@ -287,3 +287,76 @@ def next_token_empirical_probs_custom_comb(
                 probs[m, b] = probs_by_key[idx]
 
     return np.array(probs), combs
+
+import torch
+@torch.inference_mode()
+def estimate_positionwise_marginals(
+    model,
+    token_sequences: torch.LongTensor,
+    vocab_size: int,
+    K_max: int,
+    device: torch.device | str | None = None,
+    batch_size: int = 1024,
+    average_probs: bool = True
+) -> List[torch.Tensor]:
+    """
+    Compute p(next | token_at_-k = t) for k = 1..K_max by attributing each batch's
+    next-token distribution to the token appearing k steps before the end of the context.
+
+    Args:
+        model: Autoregressive LM; must accept (b, C) token IDs and return logits (b, V).
+        token_sequences (LongTensor): Shape (N, C). Each row is a context to predict the next token from.
+        vocab_size (int): Vocabulary size V expected from the model.
+        K_max (int): Furthest offset to condition on (1 = last token).
+        device (torch.device | str | None, optional): If set, inputs are moved here before the forward pass.
+        batch_size (int, optional): Number of contexts per forward pass.
+
+    Returns:
+        List[torch.Tensor]: pos_conds where pos_conds[k] has shape (V, V) and row t is
+            p(next | token_at_-k = t). Indices 0..K_max; index 0 is unused (None).
+    """
+    assert K_max >= 1, "K_max must be >= 1"
+    V = int(vocab_size)
+
+    # Resolve devices
+    model_device = next(model.parameters()).device
+    run_device = model_device if device is None else torch.device(device)
+
+    N, C = token_sequences.shape
+    if K_max > C:
+        raise ValueError(f"K_max={K_max} exceeds context length C={C}")
+
+    # Accumulators: counts[k][t] sums predicted next-token probs when token_at_-k == t
+    counts: List[torch.Tensor] = [None] * (K_max + 1)
+    for k in range(1, K_max + 1):
+        counts[k] = torch.zeros(V, V, device=run_device, dtype=torch.float32)
+
+    # Batched evaluation, iterate over batches of contexts
+    for start in range(0, N, batch_size):
+        ctx = token_sequences[start:start + batch_size].to(run_device, non_blocking=True)  # (b, C)
+        logits = model(ctx)[:, -1, :]                                              # (b, V)
+        if logits.size(-1) != V:
+            raise ValueError(f"vocab_size mismatch: expected V={V}, got V={logits.size(-1)} from model")
+
+        if average_probs:
+            contrib = logits.softmax(dim=-1)                                              # (b, V)
+        else:
+            # One-hot rows for hard predictions
+            pred = logits.argmax(dim=-1)                                                  # (b,)
+            contrib = torch.zeros_like(logits, dtype=torch.float32)
+            contrib.scatter_(1, pred.unsqueeze(1), 1.0)                                   # (b, V)
+
+        # Attribute this batch's contribution to each offset k
+        for k in range(1, K_max + 1):
+            idx = ctx[:, -k]  # (b,)    
+            ## Along index 0, at index idx, add the values of contrib                                                     
+            counts[k].index_add_(0, idx, contrib) # (V,V) += (b,V)                                         
+
+    # Normalize row-wise to obtain conditional distributions
+    pos_conds: List[torch.Tensor] = [None] * (K_max + 1)
+    for k in range(1, K_max + 1):
+        row_sums = counts[k].sum(dim=1, keepdim=True)# (V,1); equals #occurrences of each t
+        denom = row_sums.masked_fill_(row_sums == 0, 1.0) # Avoid div-by-zero
+        pos_conds[k] = (counts[k] / denom).to("cpu") # (V,V)
+
+    return pos_conds
