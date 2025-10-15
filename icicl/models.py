@@ -112,3 +112,75 @@ class ChronosTokenizer:
         with np.errstate(invalid="ignore"):
             return tilde * scale_s
 
+
+import torch
+import torch.nn.functional as F
+
+@torch.no_grad()
+def generate_autoregressive(
+    model,
+    context_ids: torch.LongTensor,      # shape (T,) or (B,T)
+    max_new_tokens: int,               # H
+    temperature: float = 1.0,
+    top_k: int | None = None,
+    top_p: float | None = None,
+    greedy: bool = False,
+):
+    """
+    Generate a sequence of tokens from a model autoregressively.
+
+    Args:
+        model: A model that takes a tensor of shape (B, T) and returns a tensor of logits shape (B, T, V).
+        context_ids: A tensor of shape (T,) or (B, T) containing the initial context.
+        max_new_tokens: The number of new tokens to generate.
+        temperature: The temperature to use for sampling.
+        top_k: The number of top-k tokens to sample from.
+        top_p: The top-p value to use for sampling.
+        greedy: Whether to sample greedily.
+    """
+    device = next(model.parameters()).device
+    x = context_ids.to(device)
+    if x.ndim == 1:
+        x = x.unsqueeze(0)  # (1,T)
+
+    model.eval()
+    for _ in range(max_new_tokens):
+        x_cond = x[:, -model.block_size:]                 # crop to context window
+        logits = model(x_cond)                            # (B,t,V)
+        logits = logits[:, -1, :]                         # (B,V)
+
+        if greedy:
+            next_id = torch.argmax(logits, dim=-1)        # (B,)
+        else:
+            # temperature + (optional) top-k/top-p sampling
+            if temperature != 1.0:
+                logits = logits / max(temperature, 1e-8)
+
+            if top_k is not None:
+                v, _ = torch.topk(logits, k=min(top_k, logits.size(-1)))
+                thresh = v[:, -1].unsqueeze(-1)
+                logits = torch.where(logits < thresh, torch.full_like(logits, float("-inf")), logits)
+
+            if top_p is not None:
+                # nucleus sampling
+                probs = F.softmax(logits, dim=-1)
+                sorted_probs, sorted_idx = torch.sort(probs, descending=True, dim=-1)
+                cdf = torch.cumsum(sorted_probs, dim=-1)
+                mask = cdf > top_p
+                # keep at least one token
+                mask[..., 0] = False
+                # set probs outside nucleus to zero, then renormalize
+                sorted_probs = torch.where(mask, torch.zeros_like(sorted_probs), sorted_probs)
+                sorted_probs = sorted_probs / sorted_probs.sum(dim=-1, keepdim=True)
+                # sample in sorted space then map back
+                next_sorted = torch.multinomial(sorted_probs, num_samples=1)  # (B,1)
+                next_id = torch.gather(sorted_idx, -1, next_sorted).squeeze(-1)
+            else:
+                probs = F.softmax(logits, dim=-1)
+                next_id = torch.multinomial(probs, num_samples=1).squeeze(-1)  # (B,)
+
+        x = torch.cat([x, next_id.unsqueeze(-1)], dim=-1)  # append
+
+    return x  # shape: (B, T + H)
+
+

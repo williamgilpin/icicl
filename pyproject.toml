@@ -1,0 +1,18 @@
+[project]
+name = "icicl"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "dysts>=0.95",
+    "ipykernel>=6.30.1",
+    "ipython>=9.6.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.6",
+    "numpy>=2.3.3",
+    "scikit-learn>=1.7.2",
+    "scipy>=1.16.2",
+    "torch>=2.8.0",
+    "torchvision>=0.23.0",
+]
