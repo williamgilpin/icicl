@@ -250,3 +250,49 @@ def participation_ratio_1d(vals: torch.Tensor):
     vals = (vals - vals.min()) / (vals.max() - vals.min() + 1e-12)
     vals = vals / vals.sum()
     return 1.0 / vals.sum()**2
+
+from scipy.special import rel_entr
+import numpy as np
+def js_divergence(p, q, smooth=None, base=None, axis=None):
+    """
+    Jensen-Shannon (JS) divergence between two probability distributions.
+
+    Args:
+        p (array_like): Histogram counts or probabilities.
+        q (array_like): Histogram counts or probabilities.
+        smooth (float | None): Optional Dirichlet pseudocount added before normalization.
+        base (float | None): If not None, change log base (e.g., 2 for bits).
+        axis (int | tuple[int, ...] | None): Axis (or axes) along which to compute JS.
+            If None, arrays are flattened.
+
+    Returns:
+        float | np.ndarray: JS divergence (finite, symmetric, bounded).
+            Returns a float if `axis is None`, else an array reduced over `axis`.
+    """
+    p = np.asarray(p, dtype=np.float64)
+    q = np.asarray(q, dtype=np.float64)
+    if p.shape != q.shape:
+        raise ValueError(f"Shapes must match, got {p.shape} vs {q.shape}")
+
+    if axis is None:
+        p = p.ravel()
+        q = q.ravel()
+
+    if smooth is not None:
+        p = p + smooth
+        q = q + smooth
+
+    # Normalize along the specified axis; avoid division by zero if a slice sums to 0.
+    denom_p = p.sum(axis=axis, keepdims=True)
+    denom_q = q.sum(axis=axis, keepdims=True)
+    # If both sums are zero, leave zeros (interpreted as empty distribution)
+    p = np.divide(p, denom_p, out=np.zeros_like(p), where=denom_p != 0)
+    q = np.divide(q, denom_q, out=np.zeros_like(q), where=denom_q != 0)
+
+    m = 0.5 * (p + q)
+
+    d = 0.5 * np.sum(rel_entr(p, m), axis=axis) + 0.5 * np.sum(rel_entr(q, m), axis=axis)
+    if base is not None:
+        d = d / np.log(base)
+
+    return float(d) if axis is None else d

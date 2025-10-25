@@ -265,7 +265,7 @@ def next_token_empirical_probs_custom_comb(
 
     # For each position subset, build an empirical model from the corpus and evaluate on queries
     for m, comb in enumerate(combs):
-        ctx = past[:, comb]                        # (N - C, k)
+        ctx = past[:, comb]                        # (N - C, k) where k is the number of indices in comb
 
         # Deduplicate the observed k-grams and count next tokens
         keys, inv = np.unique(ctx, axis=0, return_inverse=True)  # keys: (M_k, k)

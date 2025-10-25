@@ -4,7 +4,7 @@ from typing import Tuple, Optional, Dict
 
 import math, torch
 import torch.nn as nn
-from torch.utils.data import Dataset#, DataLoader
+from torch.utils.data import Dataset, DataLoader
 
 PAD_ID = 0  # reserved
 # time-series bins: [1..B]
@@ -543,3 +543,51 @@ def train_next_token(
         
 
     return model, train_losses, val_losses, val_losses_ood
+
+def _pack_config_from(model: TinyCausalLM) -> dict:
+    return {
+        "vocab_size": model.tok_emb.num_embeddings,
+        "d_model": model.tok_emb.embedding_dim,
+        "d_k": model.attn1.q.out_features,
+        "block_size": model.block_size,
+        "pos_mode": model.attn1.pos_mode,  # propagated to both blocks
+    }
+
+def batched_forward(model, X, batch_size=1000):
+    """Given a model and a tensor X, return the logits for X in batches to avoid OOM"""
+    all_logits = list()
+    for i in range(0, X.shape[0], batch_size):
+        logits = model(X[i:i+batch_size])
+        all_logits.append(logits)
+    return torch.cat(all_logits, dim=0)
+
+
+def save_checkpoint(path: str, model: TinyCausalLM, optimizer: torch.optim.Optimizer | None = None, step: int | None = None, **extra):
+    ckpt = {
+        "config": _pack_config_from(model),
+        "state_dict": model.state_dict(),
+    }
+    if optimizer is not None:
+        ckpt["optim"] = optimizer.state_dict()
+    if step is not None:
+        ckpt["step"] = step
+    ckpt.update(extra)
+    torch.save(ckpt, path)
+
+def load_model(path: str, device: str | torch.device = "cpu") -> TinyCausalLM:
+    ckpt = torch.load(path, map_location=device)
+    m = TinyCausalLM(**ckpt["config"]).to(device)
+    m.load_state_dict(ckpt["state_dict"])
+    m.eval()
+    return m
+
+def load_for_training(path: str, device: str | torch.device, lr: float, weight_decay: float = 0.0):
+    ckpt = torch.load(path, map_location=device)
+    m = TinyCausalLM(**ckpt["config"]).to(device)
+    m.load_state_dict(ckpt["state_dict"])
+    opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=weight_decay)
+    if "optim" in ckpt:
+        opt.load_state_dict(ckpt["optim"])
+    start_step = ckpt.get("step", 0)
+    m.train()
+    return m, opt, start_step
