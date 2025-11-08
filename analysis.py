@@ -296,3 +296,31 @@ def js_divergence(p, q, smooth=None, base=None, axis=None):
         d = d / np.log(base)
 
     return float(d) if axis is None else d
+
+from scipy.special import logsumexp
+def cross_entropy(logits, targets):
+    """
+    Compute the cross-entropy loss between logits and targets.
+    This is a memory-efficient version of the cross-entropy loss that avoids forming 
+    full log_softmax(x) of shape (N,V). It is equivalent to:
+
+    Args:
+        logits (ndarray): Shape (N, V), raw scores (prefer float32 to save memory).
+        targets (ndarray): Shape (N,), int labels in [0, V-1].
+
+    Returns:
+        float: Mean cross-entropy loss.
+    """
+    x = np.asarray(logits)
+    t = np.asarray(targets, dtype=np.int64)
+
+    N, V = x.shape
+    if t.shape != (N,): 
+        raise ValueError("targets must have shape (N,) matching logits")
+    if (t < 0).any() or (t >= V).any():
+        raise IndexError("target out of bounds")
+
+    # Memory-efficient: avoids forming full log_softmax(x) of shape (N,V)
+    lse = logsumexp(x, axis=1)                 # shape (N,)
+    correct = x[np.arange(N), t]               # shape (N,)
+    return (lse - correct)

@@ -443,6 +443,51 @@ class TinyCausalLM(nn.Module):
             return logits, [self.attn1.latest_attn, self.attn2.latest_attn]
         return logits
 
+    # def forward_float(self, x_float: torch.Tensor, collect_attn: bool = False):
+    #     """
+    #     Args:
+    #         x_float (torch.Tensor): Shape (B, T) float-valued inputs where integer
+    #             values correspond to token positions along the real line (e.g., 1 -> 1.0).
+    #         collect_attn (bool, optional): If True, also returns per-layer attention
+    #             matrices (detached). Defaults to False.
+
+    #     Returns:
+    #         torch.Tensor or Tuple[torch.Tensor, List[torch.Tensor]]:
+    #             If collect_attn=False: logits of shape (B, T, vocab_size).
+    #             If collect_attn=True: (logits, [attn1, attn2]) where each attn is (T, T).
+    #     """
+    #     assert x_float.dim() == 2, "x_float must be (B, T)"
+    #     assert x_float.dtype.is_floating_point, "forward_float expects float inputs"
+    #     B, T = x_float.shape
+    #     assert T <= self.block_size
+
+    #     # --- Differentiable interpolation between adjacent token embeddings ---
+    #     # clamp so that i1 stays in-range
+    #     V = self.tok_emb.num_embeddings
+    #     x_clamped = x_float.clamp(min=0.0, max=float(V - 1))
+    #     i0 = torch.floor(x_clamped).long()                         # (B, T)
+    #     i1 = torch.clamp(i0 + 1, max=V - 1)                        # (B, T)
+    #     w = (x_clamped - i0.to(x_clamped.dtype)).unsqueeze(-1)     # (B, T, 1)
+
+    #     E0 = self.tok_emb(i0)                                      # (B, T, D)
+    #     E1 = self.tok_emb(i1)                                      # (B, T, D)
+    #     x = E0 + w * (E1 - E0)                                     # (B, T, D)
+    #     # --------------------------------------------------------------------
+
+    #     # absolute positions only if pos_mode=="abs" (kept identical to .forward)
+    #     if self.use_abs:
+    #         pos = torch.arange(T, device=x.device)
+    #         x = x + self.pos_emb(pos)[None, :, :]
+
+    #     x = self.attn1(x, collect_attn=collect_attn)
+    #     x = self.attn2(x, collect_attn=collect_attn)
+    #     x = self.ln_f(x)
+    #     logits = self.lm_head(x)
+
+    #     if collect_attn:
+    #         return logits, [self.attn1.latest_attn, self.attn2.latest_attn]
+    #     return logits
+
 
 
 def train_next_token(
