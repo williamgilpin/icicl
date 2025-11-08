@@ -251,3 +251,15 @@ class SymbolicMarkovChain:
         self.P_ = P
         return self
 
+    def predict(self, X):
+        """
+        Predict the labels for a new set of observations.
+        """
+        return self.clusterer.predict(X)
+
+    def fit_predict(self, X, *args, **kwargs):
+        """
+        Fit the SymbolicMarkovChain and predict the labels for a new set of observations.
+        """
+        self.fit(X, *args, **kwargs)
+        return self.predict(X)
