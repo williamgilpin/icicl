@@ -6,9 +6,11 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "dysts>=0.95",
+    "igraph>=1.0.0",
     "ipykernel>=6.30.1",
     "ipython>=9.6.0",
     "jupyter>=1.1.1",
+    "leidenalg>=0.11.0",
     "matplotlib>=3.10.6",
     "numba>=0.62.1",
     "numpy>=2.3.3",

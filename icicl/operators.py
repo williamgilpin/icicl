@@ -1,6 +1,63 @@
 import numpy as np
 from sklearn.cluster import KMeans
+from scipy.stats import entropy
 
+def predictive_information(P, base=np.e):
+    """
+    Compute predictive information I(S_t; S_{t+1}) from a row-stochastic matrix.
+
+    Args:
+        P (array_like): Row-stochastic transition matrix of shape (n, n).
+        base (float, optional): Logarithm base. Use np.e for nats, 2 for bits.
+
+    Returns:
+        float: Predictive information I(S_t; S_{t+1}) in units set by `base`.
+    """
+    
+    n = P.shape[0]
+    pi = invariant_distribution(P)
+    row_sums = P.sum(axis=1)
+
+    P = np.clip(P, 0.0, 1.0)
+
+    # Next-state marginal q = pi P
+    q = pi @ P
+
+    I_nats = entropy(q) - np.sum([pi[i] * entropy(P[i, :]) for i in range(n)])
+    I = I_nats / np.log(base)
+    # Numerical guard against tiny negative due to floating error
+    return float(max(I, -1e-12))
+
+
+def entropy_rate(P, base=np.e):
+    """
+    Compute the entropy rate h of a Markov chain from a row-stochastic transition matrix.
+
+    Args:
+        P (np.ndarray): Row-stochastic transition matrix (n, n).
+        base (float, optional): Log base (np.e for nats, 2 for bits).
+
+    Returns:
+        float: Entropy rate h.
+    """
+    P = np.asarray(P, dtype=float)
+    pi = invariant_distribution(P)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        logP = np.log(P) / np.log(base)
+    row_ent = -np.nansum(P * logP, axis=1)  # 0*log 0 treated as nan -> ignored
+    return float(pi @ row_ent)
+
+def stationary_entropy(P):
+    """
+    Compute the stationary entropy H(S) of a Markov chain from a row-stochastic transition matrix.
+
+    Args:
+        P (np.ndarray): Row-stochastic transition matrix (n, n).
+
+    Returns:
+        float: Stationary entropy H(S).
+    """
+    return entropy(invariant_distribution(P))
 
 def invariant_distribution(P, tol=1e-12, max_iter=10_000, fix_dangling=True, seed=None):
     """
@@ -57,6 +114,87 @@ def invariant_distribution(P, tol=1e-12, max_iter=10_000, fix_dangling=True, see
     return pi
 
 
+def leading_transients(P, m=3, tol=1e-10, max_iter=20_000, seed=None):
+    """
+    Sequentially compute the longest-lived transient *left* modes of a Markov chain
+    using simple deflation: at each stage subtract 1*u^T so that the found left
+    eigenvector u^T is annihilated in subsequent searches.
+
+    Args:
+        P (array-like): Row-stochastic transition matrix (N, N).
+        m (int): Number of transient modes to compute (excludes the stationary mode).
+        tol (float): L2 tolerance for convergence of each mode.
+        max_iter (int): Maximum iterations per mode.
+        seed (int | None): RNG seed.
+
+    Returns:
+        evals (ndarray): Length-m array of eigenvalue estimates |λ| in non-increasing order.
+        evecs (ndarray): (m, N) array; evecs[j] is the j-th transient left mode (L2-normalized, sum≈0).
+        pi (ndarray): Stationary distribution (N,).
+    """
+    P = np.asarray(P, dtype=float)
+    n = P.shape[0]
+    if P.shape != (n, n): raise ValueError("P must be square")
+    if not (1 <= m <= n - 1): raise ValueError("m must be in [1, N-1]")
+
+    # 1) Fix dangling and get π
+    pi = invariant_distribution(P, fix_dangling=True, seed=seed)
+
+    # 2) Build deflated operator that kills π; then iteratively deflate found transients
+    Pdef = deflated_operator(P, pi)  # P - 1*pi^T
+    Pt = P.T
+
+    rng = np.random.default_rng(seed)
+    evals, modes = [], []
+
+    ones = np.ones(n)
+
+    def project_stable(v):
+        # Remove any leakage back into π and enforce zero-sum (left transient modes satisfy u^T 1 = 0)
+        v = v - (v @ pi) * pi
+        v = v - (v.sum() / n) * ones
+        return v
+
+    for _ in range(m):
+        # Initialize in the zero-sum, π-orthogonal subspace
+        v = rng.normal(size=n)
+        v = project_stable(v)
+        nv = np.linalg.norm(v)
+        if nv == 0 or not np.isfinite(nv): v = rng.normal(size=n); v = project_stable(v); nv = np.linalg.norm(v)
+        v /= nv
+
+        # Power iteration on (Pdef)^T to find current dominant transient left mode
+        Pt_def = Pdef.T
+        prev = v.copy()
+        for _it in range(max_iter):
+            w = Pt_def @ v
+            nw = np.linalg.norm(w)
+            if nw == 0 or not np.isfinite(nw): raise FloatingPointError("Deflated power iteration became singular")
+            v = w / nw
+            v = project_stable(v)
+            nv = np.linalg.norm(v)
+            if nv == 0 or not np.isfinite(nv): raise FloatingPointError("Projection produced degenerate vector")
+            v /= nv
+            if np.linalg.norm(v - prev) < tol: break
+            prev = v
+
+        # Stabilize sign (deterministic)
+        imax = np.argmax(np.abs(v))
+        if v[imax] < 0: v = -v
+
+        # Eigenvalue estimate from original P (Rayleigh quotient for left vector)
+        lam = float(v @ (Pt @ v))
+
+        evals.append(lam)
+        modes.append(v.copy())
+
+        # 3) Deflate this mode so the next search is self-consistent
+        Pdef = deflated_operator(Pdef, v)  # cumulative: P - 1*pi^T - sum 1*u_i^T
+
+    return np.asarray(evals), np.vstack(modes), pi
+
+
+
 def deflated_operator(P, pi):
     """
     A deflated operator that removes a trivial mode from a row-stochastic matrix
@@ -88,8 +226,8 @@ def transition_matrix(seq, vocab_size, tau=1, normalize=True, dtype=float):
         P (np.ndarray, shape (vocab_size, vocab_size)): Row-stochastic transition matrix
             (or counts if normalize=False). Rows with no outgoing observations are all zeros.
     """
-    if tau < 1:
-        raise ValueError("tau must be ≥ 1")
+    # if tau < 1:
+    #     raise ValueError("tau must be ≥ 1")
     seq = np.asarray(seq, dtype=np.int64)
     n = len(seq)
     if n <= tau:
