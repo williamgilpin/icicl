@@ -1,6 +1,63 @@
 import numpy as np
 from sklearn.cluster import KMeans
+from scipy.stats import entropy
 
+def predictive_information(P, base=np.e):
+    """
+    Compute predictive information I(S_t; S_{t+1}) from a row-stochastic matrix.
+
+    Args:
+        P (array_like): Row-stochastic transition matrix of shape (n, n).
+        base (float, optional): Logarithm base. Use np.e for nats, 2 for bits.
+
+    Returns:
+        float: Predictive information I(S_t; S_{t+1}) in units set by `base`.
+    """
+    
+    n = P.shape[0]
+    pi = invariant_distribution(P)
+    row_sums = P.sum(axis=1)
+
+    P = np.clip(P, 0.0, 1.0)
+
+    # Next-state marginal q = pi P
+    q = pi @ P
+
+    I_nats = entropy(q) - np.sum([pi[i] * entropy(P[i, :]) for i in range(n)])
+    I = I_nats / np.log(base)
+    # Numerical guard against tiny negative due to floating error
+    return float(max(I, -1e-12))
+
+
+def entropy_rate(P, base=np.e):
+    """
+    Compute the entropy rate h of a Markov chain from a row-stochastic transition matrix.
+
+    Args:
+        P (np.ndarray): Row-stochastic transition matrix (n, n).
+        base (float, optional): Log base (np.e for nats, 2 for bits).
+
+    Returns:
+        float: Entropy rate h.
+    """
+    P = np.asarray(P, dtype=float)
+    pi = invariant_distribution(P)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        logP = np.log(P) / np.log(base)
+    row_ent = -np.nansum(P * logP, axis=1)  # 0*log 0 treated as nan -> ignored
+    return float(pi @ row_ent)
+
+def stationary_entropy(P):
+    """
+    Compute the stationary entropy H(S) of a Markov chain from a row-stochastic transition matrix.
+
+    Args:
+        P (np.ndarray): Row-stochastic transition matrix (n, n).
+
+    Returns:
+        float: Stationary entropy H(S).
+    """
+    return entropy(invariant_distribution(P))
 
 def invariant_distribution(P, tol=1e-12, max_iter=10_000, fix_dangling=True, seed=None):
     """
