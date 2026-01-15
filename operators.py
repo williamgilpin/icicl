@@ -29,10 +29,25 @@ def predictive_information(P, base=np.e):
     return float(max(I, -1e-12))
 
 
+# def entropy_rate(P, base=np.e):
+#     """
+#     Compute the entropy rate h of a Markov chain from a row-stochastic transition matrix.
+
+#     Args:
+#         P (np.ndarray): Row-stochastic transition matrix (n, n).
+#         base (float, optional): Log base (np.e for nats, 2 for bits).
+
+#     Returns:
+#         float: Entropy rate h.
+#     """
+#     P = np.asarray(P, dtype=float)
+#     pi = invariant_distribution(P)
+#     with np.errstate(divide="ignore", invalid="ignore"):
+#         logP = np.log(P) / np.log(base)
+#     row_ent = -np.nansum(P * logP, axis=1)  # 0*log 0 treated as nan -> ignored
+#     return float(pi @ row_ent)
 def entropy_rate(P, base=np.e):
     """
-    Compute the entropy rate h of a Markov chain from a row-stochastic transition matrix.
-
     Args:
         P (np.ndarray): Row-stochastic transition matrix (n, n).
         base (float, optional): Log base (np.e for nats, 2 for bits).
@@ -42,10 +57,11 @@ def entropy_rate(P, base=np.e):
     """
     P = np.asarray(P, dtype=float)
     pi = invariant_distribution(P)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        logP = np.log(P) / np.log(base)
-    row_ent = -np.nansum(P * logP, axis=1)  # 0*log 0 treated as nan -> ignored
-    return float(pi @ row_ent)
+
+    log_base = np.log(base)
+    row_H = -np.sum(np.where(P > 0, P * (np.log(P) / log_base), 0.0), axis=1)
+
+    return float(pi @ row_H)
 
 def stationary_entropy(P):
     """
@@ -112,7 +128,6 @@ def invariant_distribution(P, tol=1e-12, max_iter=10_000, fix_dangling=True, see
     pi = np.maximum(pi, 0)
     pi /= pi.sum()
     return pi
-
 
 def leading_transients(P, m=3, tol=1e-10, max_iter=20_000, seed=None):
     """
@@ -193,8 +208,6 @@ def leading_transients(P, m=3, tol=1e-10, max_iter=20_000, seed=None):
 
     return np.asarray(evals), np.vstack(modes), pi
 
-
-
 def deflated_operator(P, pi):
     """
     A deflated operator that removes a trivial mode from a row-stochastic matrix
@@ -210,43 +223,101 @@ def deflated_operator(P, pi):
     return P - np.outer(np.ones(n), pi)
 
 
-def transition_matrix(seq, vocab_size, tau=1, normalize=True, dtype=float):
+def transition_matrix(seq, vocab_size=None, tau=1, normalize=True, dtype=float, remap=True):
     """
     Estimate the lag-τ Markov transition matrix P where
     P[i, j] = Pr(s_t = j | s_{t-τ} = i) from an integer sequence.
 
     Args:
-        seq (Sequence[int]): Observed states, each in [0, vocab_size).
-        vocab_size (int): Number of possible states.
-        tau (int, default=1): Lag between conditioning and target (τ ≥ 1).
-        normalize (bool, default=True): If True, return probabilities; if False, return raw counts.
-        dtype (type, default=float): dtype for the returned matrix when normalize=True.
+        seq (Sequence[int]): Observed states.
+        vocab_size (int | None): Number of possible states. If None and remap=True, inferred as
+            number of unique states in seq after remapping. If None and remap=False, inferred as
+            max(seq)+1.
+        tau (int, optional): Lag between conditioning and target (τ ≥ 1).
+        normalize (bool, optional): If True, return probabilities; if False, return raw counts.
+        dtype (type, optional): dtype for the returned matrix when normalize=True.
+        remap (bool, optional): If True, remap arbitrary integer labels to 0..K-1.
 
     Returns:
-        P (np.ndarray, shape (vocab_size, vocab_size)): Row-stochastic transition matrix
-            (or counts if normalize=False). Rows with no outgoing observations are all zeros.
+        np.ndarray: (vocab_size, vocab_size) transition matrix (row-stochastic if normalize=True).
     """
-    # if tau < 1:
-    #     raise ValueError("tau must be ≥ 1")
-    seq = np.asarray(seq, dtype=np.int64)
-    n = len(seq)
-    if n <= tau:
-        return np.zeros((vocab_size, vocab_size), dtype=(dtype if normalize else np.int64))
+    if tau < 1:
+        raise ValueError("tau must be ≥ 1")
 
-    src = seq[:-tau]   # s_{t-τ}
-    dst = seq[tau:]    # s_t
+    seq = np.asarray(seq, dtype=np.int64)
+    n = seq.size
+    if n <= tau:
+        vs = 0 if vocab_size is None else int(vocab_size)
+        out_dtype = dtype if normalize else np.int64
+        return np.zeros((vs, vs), dtype=out_dtype)
+
+    if remap:
+        # Map arbitrary labels (e.g., {7, 241, 999}) -> {0, 1, 2}
+        _, seq = np.unique(seq, return_inverse=True)
+        if vocab_size is None:
+            vocab_size = int(seq.max()) + 1
+    else:
+        if vocab_size is None:
+            vocab_size = int(seq.max()) + 1
+
+    vocab_size = int(vocab_size)
+
+    if seq.min() < 0 or seq.max() >= vocab_size:
+        raise ValueError(f"State index out of range: min={seq.min()}, max={seq.max()}, vocab_size={vocab_size}")
+
+    src = seq[:-tau]
+    dst = seq[tau:]
 
     counts = np.zeros((vocab_size, vocab_size), dtype=np.int64)
-    np.add.at(counts, (src, dst), 1)  # accumulate counts for (src -> dst)
+    np.add.at(counts, (src, dst), 1)
 
     if not normalize:
         return counts
 
     row_sums = counts.sum(axis=1, keepdims=True)
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         P = counts / row_sums
-    P[row_sums.squeeze() == 0] = 0  # keep rows with no evidence as zeros
+    P[row_sums.squeeze() == 0] = 0
     return P.astype(dtype)
+
+
+# def transition_matrix(seq, vocab_size, tau=1, normalize=True, dtype=float):
+#     """
+#     Estimate the lag-τ Markov transition matrix P where
+#     P[i, j] = Pr(s_t = j | s_{t-τ} = i) from an integer sequence.
+
+#     Args:
+#         seq (Sequence[int]): Observed states, each in [0, vocab_size).
+#         vocab_size (int): Number of possible states.
+#         tau (int, default=1): Lag between conditioning and target (τ ≥ 1).
+#         normalize (bool, default=True): If True, return probabilities; if False, return raw counts.
+#         dtype (type, default=float): dtype for the returned matrix when normalize=True.
+
+#     Returns:
+#         P (np.ndarray, shape (vocab_size, vocab_size)): Row-stochastic transition matrix
+#             (or counts if normalize=False). Rows with no outgoing observations are all zeros.
+#     """
+#     # if tau < 1:
+#     #     raise ValueError("tau must be ≥ 1")
+#     seq = np.asarray(seq, dtype=np.int64)
+#     n = len(seq)
+#     if n <= tau:
+#         return np.zeros((vocab_size, vocab_size), dtype=(dtype if normalize else np.int64))
+
+#     src = seq[:-tau]   # s_{t-τ}
+#     dst = seq[tau:]    # s_t
+
+#     counts = np.zeros((vocab_size, vocab_size), dtype=np.int64)
+#     np.add.at(counts, (src, dst), 1)  # accumulate counts for (src -> dst)
+
+#     if not normalize:
+#         return counts
+
+#     row_sums = counts.sum(axis=1, keepdims=True)
+#     with np.errstate(divide='ignore', invalid='ignore'):
+#         P = counts / row_sums
+#     P[row_sums.squeeze() == 0] = 0  # keep rows with no evidence as zeros
+#     return P.astype(dtype)
 
 
 def transitions_from_time_labels(T, labels, K, tau_time, normalize=True, dtype=float):
@@ -291,6 +362,76 @@ def transitions_from_time_labels(T, labels, K, tau_time, normalize=True, dtype=f
     with np.errstate(invalid="ignore", divide="ignore"):
         P = np.where(row_sums > 0, counts / row_sums, 0.0)
     return P.astype(dtype)
+
+
+def reduce_markov_chain(P, assignment, weights=None, renormalize=True, atol=1e-12):
+    """
+    Given a row-stochastic transition matrix P and a mapping of microstates to metastates,
+    reduce the matrix by averaging transitions within each metastate.
+    
+    Args:
+        P (np.ndarray): Row-stochastic transition matrix of shape (N, N).
+        assignment (array_like): Length-N vector mapping each microstate to a metastate
+            (integers; need not be contiguous).
+        weights (array_like | None): Optional nonnegative length-N weights for averaging
+            rows within each metastate. If None, uses uniform weights within each metastate.
+            A common alternative is the stationary distribution of P.
+        renormalize (bool): If True, renormalize each row of the reduced matrix to sum to 1.
+        atol (float): Small threshold used for numerical safety.
+
+    Returns:
+        np.ndarray: Reduced row-stochastic transition matrix of shape (M, M).
+    """
+    P = np.asarray(P, dtype=float)
+    if P.ndim != 2 or P.shape[0] != P.shape[1]:
+        raise ValueError("P must be a square (N, N) array.")
+    N = P.shape[0]
+
+    a = np.asarray(assignment)
+    if a.shape[0] != N:
+        raise ValueError("assignment must have length N to match P.")
+
+    # Map arbitrary labels -> {0,1,...,M-1}
+    labels, inv = np.unique(a, return_inverse=True)
+    M = labels.size
+
+    if weights is None:
+        w = np.ones(N, dtype=float)
+    else:
+        w = np.asarray(weights, dtype=float)
+        if w.shape[0] != N:
+            raise ValueError("weights must have length N to match P.")
+        if np.any(w < -atol):
+            raise ValueError("weights must be nonnegative.")
+        w = np.maximum(w, 0.0)
+
+    # Build membership matrix S: S[i, m] = 1 if microstate i is in metastate m
+    S = np.zeros((N, M), dtype=float)
+    S[np.arange(N), inv] = 1.0
+
+    # For each microstate i and metastate b: Q[i,b] = sum_{j in b} P[i,j]
+    Q = P @ S  # shape (N, M)
+
+    # Weighted averaging of rows within each metastate:
+    # P_red[a,b] = (sum_{i in a} w_i * Q[i,b]) / (sum_{i in a} w_i)
+    P_reduced_num = (w[:, None] * Q).T @ S  # (M,N)@(N,M) -> (M,M) but via transpose trick
+    # The above line is a bit opaque; clearer equivalent:
+    # P_reduced_num = np.zeros((M, M))
+    # for i in range(N): P_reduced_num[inv[i], :] += w[i] * Q[i, :]
+
+    meta_mass = (w[:, None] * S).sum(axis=0)  # length M, meta_mass[a] = sum_{i in a} w_i
+    if np.any(meta_mass <= atol):
+        raise ValueError("At least one metastate has (near-)zero total weight; cannot reduce.")
+
+    P_reduced = P_reduced_num / meta_mass[:, None]
+
+    if renormalize:
+        row_sums = P_reduced.sum(axis=1, keepdims=True)
+        # If numerical drift produces tiny row_sums, protect division
+        row_sums = np.where(row_sums <= atol, 1.0, row_sums)
+        P_reduced = P_reduced / row_sums
+
+    return P_reduced
 
 
 from clustering import UniformGridClusterer
