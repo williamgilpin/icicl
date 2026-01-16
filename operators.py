@@ -381,6 +381,8 @@ def reduce_markov_chain(P, assignment, weights=None, renormalize=True, atol=1e-1
 
     Returns:
         np.ndarray: Reduced row-stochastic transition matrix of shape (M, M).
+            Metastates with zero or near-zero total weight are assigned self-transitions
+            (P[a,a] = 1, P[a,b] = 0 for b≠a), representing isolated/absorbing states.
     """
     P = np.asarray(P, dtype=float)
     if P.ndim != 2 or P.shape[0] != P.shape[1]:
@@ -419,11 +421,18 @@ def reduce_markov_chain(P, assignment, weights=None, renormalize=True, atol=1e-1
     # P_reduced_num = np.zeros((M, M))
     # for i in range(N): P_reduced_num[inv[i], :] += w[i] * Q[i, :]
 
-    meta_mass = (w[:, None] * S).sum(axis=0)  # length M, meta_mass[a] = sum_{i in a} w_i
-    if np.any(meta_mass <= atol):
-        raise ValueError("At least one metastate has (near-)zero total weight; cannot reduce.")
+    # Initialize the reduced matrix to the identity matrix
+    P_reduced = np.identity(M)
 
-    P_reduced = P_reduced_num / meta_mass[:, None]
+    meta_mass = (w[:, None] * S).sum(axis=0)  # length M, meta_mass[a] = sum_{i in a} w_i
+    # Identify metastates with zero or near-zero weight (isolated states)
+    isolated = meta_mass <= atol
+    # Handle normal metastates (those with positive weight)
+    valid_mask = ~isolated
+    if np.any(valid_mask):
+        # Division is safe since we only divide for valid metastates
+        P_reduced[valid_mask, :] = P_reduced_num[valid_mask, :] / meta_mass[valid_mask, None]
+    
 
     if renormalize:
         row_sums = P_reduced.sum(axis=1, keepdims=True)
