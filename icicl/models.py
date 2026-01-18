@@ -504,6 +504,8 @@ def train_next_token(
     weight_decay: float = 0.0,
     grad_accum: int = 1,
     device: str | torch.device | None = None,
+    save_path: str = None,
+    cadence: int = 1000,
 ):
     """
     Train a tiny causal language model to predict the next token in a sequence.
@@ -521,6 +523,8 @@ def train_next_token(
         grad_accum: The number of micro-batches to accumulate gradients over when 
             training on a single GPU.
         device: The device to train the model on.
+        save_path: The path to save the checkpoint.
+        cadence: If saving, the number of steps between checkpoints.
 
     Returns:
         A TinyCausalLM model.
@@ -585,7 +589,8 @@ def train_next_token(
                 val_losses_ood.append(loss.item())
 
             print(f"step {step} | train loss {train_losses[-1]:.4f} | val loss {val_losses[-1]:.4f} | val ood loss {val_losses_ood[-1]:.4f}")
-        
+        if save_path is not None and (step - 1) % cadence == 0:
+            save_checkpoint(save_path + f"ckpt_{str(step).zfill(6)}.pt", model, opt, step)
 
     return model, train_losses, val_losses, val_losses_ood
 
@@ -608,6 +613,18 @@ def batched_forward(model, X, batch_size=1000):
 
 
 def save_checkpoint(path: str, model: TinyCausalLM, optimizer: torch.optim.Optimizer | None = None, step: int | None = None, **extra):
+    """Save a checkpoint of the model and optimizer
+    
+    Args:
+        path: The path to save the checkpoint.
+        model: The model to save.
+        optimizer: The optimizer to save.
+        step: The step number to save.
+        **extra: Additional metadata to save.
+
+    Returns:
+        None
+    """
     ckpt = {
         "config": _pack_config_from(model),
         "state_dict": model.state_dict(),
