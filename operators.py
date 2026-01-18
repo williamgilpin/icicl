@@ -479,7 +479,7 @@ class SymbolicMarkovChain:
         
     """
 
-    def fit(self, X, K, tau, T=None, clustering_method="kmeans"):
+    def fit(self, X, K, tau, T=None, clustering_method="kmeans", normalize=True):
         """
         Fit a SymbolicMarkovChain to a multivariate time series.
 
@@ -490,6 +490,7 @@ class SymbolicMarkovChain:
                 with T_j >= T_i + tau (if such j exists).
             T (array-like, optional): Time stamps (need not be uniform; any real-valued, sortable type).
             clustering_method (str, optional): Clustering method to use. "kmeans" or "uniform".
+            normalize (bool, optional): If True, normalize the transition matrix to sum to 1.
 
         Returns:
             self (SymbolicMarkovChain): The fitted SymbolicMarkovChain.
@@ -531,10 +532,11 @@ class SymbolicMarkovChain:
 
         ## If times are provided, use them to compute transitions among symbols
         if T is not None:
-            P = transitions_from_time_labels(T, labels, self.K, self.tau, normalize=True, dtype=float)
+            P = transitions_from_time_labels(T, labels, self.K, self.tau, normalize=normalize, dtype=float)
         else:
             ## Otherwise, compute transitions among observations directly
-            P = transition_matrix(labels, self.K, tau=int(self.tau), normalize=True, dtype=float)
+            # print("Using transition_matrix with normalize=False", flush=True)
+            P = transition_matrix(labels, self.K, tau=int(self.tau), normalize=normalize, dtype=float)
 
         self.P_ = P
         return self
