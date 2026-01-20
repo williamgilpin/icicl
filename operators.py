@@ -279,7 +279,7 @@ def deflated_operator(P, pi):
     return P - np.outer(np.ones(n), pi)
 
 
-def transition_matrix(seq, vocab_size=None, tau=1, normalize=True, dtype=float, remap=True):
+def transition_matrix2(seq, vocab_size=None, tau=1, normalize=True, dtype=float, remap=True):
     """
     Estimate the lag-τ Markov transition matrix P where
     P[i, j] = Pr(s_t = j | s_{t-τ} = i) from an integer sequence.
@@ -336,6 +336,171 @@ def transition_matrix(seq, vocab_size=None, tau=1, normalize=True, dtype=float, 
     P[row_sums.squeeze() == 0] = 0
     return P.astype(dtype)
 
+
+def rbf_memberships(X, centers, sigma, normalize=True):
+    """
+    Compute Gaussian (RBF) soft memberships based on distance to centers.
+
+    Args:
+        X (array-like): Data points, shape (N, d).
+        centers (array-like): Bin/prototype centers, shape (K, d).
+        sigma (float): Kernel bandwidth (length scale).
+        normalize (bool, optional): If True, rows sum to 1.
+
+    Returns:
+        (np.ndarray): Membership matrix of shape (N, K).
+    """
+    X = np.asarray(X, dtype=float)
+    C = np.asarray(centers, dtype=float)
+    if X.ndim != 2 or C.ndim != 2:
+        raise ValueError("X and centers must be 2D arrays.")
+    if X.shape[1] != C.shape[1]:
+        raise ValueError("X and centers must have same feature dimension.")
+    if not (np.isfinite(sigma) and sigma > 0):
+        raise ValueError("sigma must be positive and finite.")
+
+    # squared Euclidean distances
+    d2 = ((X[:, None, :] - C[None, :, :]) ** 2).sum(axis=-1)
+    M = np.exp(-0.5 * d2 / (sigma ** 2))
+
+    if normalize:
+        s = M.sum(axis=1, keepdims=True)
+        M = np.where(s > 0, M / s, 0.0)
+    return M
+
+def choose_sigma_responsibility(X, centers, p=0.8):
+    """
+    Choose the sigma for the RBF kernel based on the responsibility of the nearest center.
+
+    Args:
+        X (ndarray): (N,d)
+        centers (ndarray): (K,d)
+        p (float): target typical membership for nearest center (0.5<p<1).
+
+    Returns:
+        (float): sigma
+    """
+    if not (0.5 < p < 1.0):
+        raise ValueError("p must be in (0.5, 1).")
+    X = np.asarray(X, float)
+    C = np.asarray(centers, float)
+    d2 = ((X[:, None, :] - C[None, :, :]) ** 2).sum(axis=-1)
+    part = np.partition(d2, 1, axis=1)
+    d1_2 = part[:, 0]
+    d2_2 = part[:, 1]
+    delta = np.median(d2_2 - d1_2)
+    return float(np.sqrt(delta / (2.0 * np.log(p / (1.0 - p)))))
+
+
+def transition_matrix(
+    seq,
+    vocab_size=None,
+    tau=1,
+    normalize=True,
+    dtype=float,
+    remap=True,
+    memberships=None,
+):
+    """
+    Estimate the lag-τ Markov transition matrix P.
+
+    Supports:
+      - Hard labels: integer seq, with optional remapping.
+      - Soft labels: memberships[t, k] giving Pr(state=k at time t) or unnormalized nonnegative weights.
+
+    Hard-label estimator:
+        C[i, j] = #{t : s_{t}=i, s_{t+τ}=j}
+
+    Soft-label estimator:
+        C[i, j] = Σ_t m_t[i] m_{t+τ}[j]
+
+    Args:
+        seq (Sequence[int] | None): Observed hard states. Ignored if memberships is provided.
+        vocab_size (int | None): Number of states K. If memberships is provided, inferred if None.
+            If hard labels: if None and remap=True, inferred as #unique after remapping; if remap=False,
+            inferred as max(seq)+1.
+        tau (int, optional): Lag between conditioning and target (τ ≥ 1).
+        normalize (bool, optional): If True, return probabilities; if False, return raw counts.
+        dtype (type, optional): dtype for the returned matrix when normalize=True.
+        remap (bool, optional): If True, remap arbitrary integer labels to 0..K-1 (hard-label mode only).
+        memberships (array-like | None): Optional soft memberships of shape (N,, K). If provided,
+            rows are renormalized to sum to 1 and `seq`/`remap` are ignored.
+
+    Returns:
+        np.ndarray: (K, K) transition matrix (row-stochastic if normalize=True).
+    """
+    if tau < 1:
+        raise ValueError("tau must be ≥ 1")
+
+    # --- Soft-membership mode ---
+    if memberships is not None:
+        M = np.asarray(memberships, dtype=float)
+        if M.ndim != 2:
+            raise ValueError("memberships must be a 2D array of shape (N, K)")
+        N, K = M.shape
+
+        if vocab_size is None:
+            vocab_size = K
+        vocab_size = int(vocab_size)
+        if vocab_size != K:
+            raise ValueError(f"vocab_size ({vocab_size}) must match memberships.shape[1] ({K})")
+
+        if N <= tau:
+            out_dtype = dtype if normalize else float
+            return np.zeros((vocab_size, vocab_size), dtype=out_dtype)
+
+        # Renormalize rows to sum to 1 (tolerant partition-of-unity enforcement)
+        rs = M.sum(axis=1, keepdims=True)
+        M = np.where(rs > 0, M / rs, 0.0)
+
+        Ms = M[:-tau, :]   # (N-tau, K)
+        Md = M[tau:, :]    # (N-tau, K)
+
+        counts = Ms.T @ Md  # (K, K), float
+
+        if not normalize:
+            return counts
+
+        row_sums = counts.sum(axis=1, keepdims=True)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            P = np.where(row_sums > 0, counts / row_sums, 0.0)
+        return P.astype(dtype)
+
+    # --- Hard-label mode ---
+    seq = np.asarray(seq, dtype=np.int64)
+    n = seq.size
+    if n <= tau:
+        vs = 0 if vocab_size is None else int(vocab_size)
+        out_dtype = dtype if normalize else np.int64
+        return np.zeros((vs, vs), dtype=out_dtype)
+
+    if remap:
+        _, seq = np.unique(seq, return_inverse=True)
+        if vocab_size is None:
+            vocab_size = int(seq.max()) + 1
+    else:
+        if vocab_size is None:
+            vocab_size = int(seq.max()) + 1
+
+    vocab_size = int(vocab_size)
+    if seq.min() < 0 or seq.max() >= vocab_size:
+        raise ValueError(
+            f"State index out of range: min={seq.min()}, max={seq.max()}, vocab_size={vocab_size}"
+        )
+
+    src = seq[:-tau]
+    dst = seq[tau:]
+
+    counts = np.zeros((vocab_size, vocab_size), dtype=np.int64)
+    np.add.at(counts, (src, dst), 1)
+
+    if not normalize:
+        return counts
+
+    row_sums = counts.sum(axis=1, keepdims=True)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        P = np.where(row_sums > 0, counts / row_sums, 0.0)
+    return P.astype(dtype)
 
 # def transition_matrix(seq, vocab_size, tau=1, normalize=True, dtype=float):
 #     """
@@ -676,6 +841,12 @@ class SymbolicMarkovChain:
         else:
             ## Otherwise, compute transitions among observations directly
             # print("Using transition_matrix with normalize=False", flush=True)
+
+            # centers = self.clusterer.cluster_centers_
+            # sigma = choose_sigma_responsibility(X, centers)
+            # M = rbf_memberships(X, centers, sigma)
+            # P = transition_matrix(seq=None, memberships=M, tau=1, normalize=True)
+           
             P = transition_matrix(labels, self.K, tau=int(self.tau), normalize=normalize, dtype=float)
 
         self.P_ = P
