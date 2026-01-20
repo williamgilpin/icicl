@@ -29,23 +29,79 @@ def predictive_information(P, base=np.e):
     return float(max(I, -1e-12))
 
 
-# def entropy_rate(P, base=np.e):
-#     """
-#     Compute the entropy rate h of a Markov chain from a row-stochastic transition matrix.
+import warnings
 
-#     Args:
-#         P (np.ndarray): Row-stochastic transition matrix (n, n).
-#         base (float, optional): Log base (np.e for nats, 2 for bits).
+def row_quality_score(P, counts=None, N0=50.0, eps=1e-12):
+    """
+    A score for the quality of a row-stochastic matrix. Balances between all transitions 
+    being self-loops and all transitions being between different pairs of states.
 
-#     Returns:
-#         float: Entropy rate h.
-#     """
-#     P = np.asarray(P, dtype=float)
-#     pi = invariant_distribution(P)
-#     with np.errstate(divide="ignore", invalid="ignore"):
-#         logP = np.log(P) / np.log(base)
-#     row_ent = -np.nansum(P * logP, axis=1)  # 0*log 0 treated as nan -> ignored
-#     return float(pi @ row_ent)
+    Args:
+        P (ndarray): Row-stochastic matrix (K, K).
+        counts (ndarray | None): Optional count matrix (K, K) used to compute N_i.
+        N0 (float): Count-regularization scale.
+        eps (float): Numerical stability constant.
+
+    Returns:
+        (ndarray): Score per row (K,).
+    """
+    P = np.asarray(P, float)
+    K = P.shape[0]
+    diag = np.diag(P)
+    q = 1.0 - diag  # probability of leaving each state
+
+    # off-diagonal probabilities, renormalized
+    P_off = P.copy()
+    np.fill_diagonal(P_off, 0.0)
+    denom = q[:, None] + eps
+    ptilde = P_off / denom
+
+    # effective number of destinations (inverse Simpson)
+    neff = 1.0 / (np.sum(ptilde**2, axis=1) + eps)
+
+    score = q * neff
+
+    if counts is not None:
+        C = np.asarray(counts, float)
+        Ni = C.sum(axis=1)
+        reliability = Ni / (Ni + N0)
+        score = score * reliability
+
+    return score
+
+def find_optimal_partition(traj, kmin=2, kmax=500, num_bins=25, tau=1, verbose=False, **kwargs):
+    """
+    Find the optimal number of clusters for a Markov Chain using the rowwise scoring.
+    
+    For too few bins, the score is low because most transitions are self-loops.
+    For too many bins, the score is low because most transitions between pairs 
+        of bins are seen only once
+
+    Example:
+        >>> find_optimal_partition(traj_test_out, kmin=50, kmax=2000, num_bins=25, tau=1, verbose=True)
+        
+    """
+    kvals = np.unique(np.linspace(kmin, kmax, num_bins).astype(int))
+    all_row_scores = []
+    for kval in kvals:
+        mk = SymbolicMarkovChain()
+        label_order = mk.fit_predict(traj, kval, tau, **kwargs)
+        P_symbolic = mk.P_.copy()
+        row_entropy = np.mean(entropy(P_symbolic, axis=1))
+        all_row_scores.append(row_entropy)
+        if verbose:
+            print(f"k={kval}, Score={row_entropy}")
+    row_entropy = np.array(all_row_scores)
+    ## find the moving average of the row entropy
+    row_entropy_ma = np.convolve(row_entropy, np.ones(3)/3, mode='valid')
+    best_ind = np.argmax(row_entropy_ma)
+    if best_ind in [0, len(row_entropy_ma) - 1]:
+        warnings.warn("Best k is at the edge of the range, consider decreasing kmin or increasing kvals")
+    if best_ind == len(row_entropy_ma) - 1:
+        warnings.warn("Best k is at the edge of the range, consider increasing kmax or increasing kvals")
+    return kvals[best_ind]
+
+
 def entropy_rate(P, base=np.e):
     """
     Args:
@@ -364,6 +420,81 @@ def transitions_from_time_labels(T, labels, K, tau_time, normalize=True, dtype=f
     return P.astype(dtype)
 
 
+# def reduce_markov_chain(P, reduction_map, weights=None):
+#     """
+#     Args:
+#         P (array-like): Row-stochastic transition matrix of shape (N, N).
+#         reduction_map (array-like): Length-N mapping from microstate index -> macro label.
+#             Example: reduction_map[i] = macro_label_of_state_i.
+#         weights (array-like, optional): Length-N nonnegative weights for choosing a microstate
+#             within each macrostate before taking one step. If None, uses uniform-within-macro.
+#             (Weights are normalized within each macrostate row.)
+
+#     Returns:
+#         (tuple[np.ndarray, np.ndarray]): (P_red, labels)
+#             P_red is the reduced row-stochastic matrix of shape (M, M).
+#             labels is the macro-label ordering used (length M).
+#     """
+#     N = P.shape[0]
+
+#     ## Unique indices of macrolabels
+#     labels = np.array(sorted(set(reduction_map.tolist())))
+#     M = len(labels)
+
+#     # Map macro labels -> 0..M-1
+#     label_to_idx = {lab: i for i, lab in enumerate(labels)}
+#     macro_idx = np.array([label_to_idx.get(lab, -1) for lab in reduction_map], dtype=int)
+#     ## Same as labels?
+
+#     if np.any(macro_idx < 0):
+#         missing = sorted(set(reduction_map[macro_idx < 0].tolist()))
+#         raise ValueError(f"reduction_map contains labels not in state_labels: {missing}")
+
+    
+
+#     # Membership matrix B: B[a, i] = 1 if micro a is in macro i
+#     B = np.zeros((N, M), dtype=float)
+#     B[np.arange(N), macro_idx] = 1.0
+
+#     # Block-summed transitions T = P @ B, so T[a, j] = sum_{b in macro j} P[a, b]
+#     T = P @ B  # (N, M)
+
+#     # Choose within each macro i a distribution over microstates a in i via weights.
+#     if weights is None:
+#         # w = np.ones(N, dtype=float)
+#         w = invariant_distribution(P) # invariant distribution of full-state Markov chain
+#     else:
+#         w = np.asarray(weights, dtype=float)
+
+#     P_red = np.zeros((M, M), dtype=float)
+#     counts = np.zeros(M, dtype=int)
+
+#     for i in range(M):
+#         micro = np.where(macro_idx == i)[0]
+#         counts[i] = micro.size # number of microstates in macro i
+#         if micro.size == 0:
+#             continue
+
+#         wi = w[micro]
+#         s = wi.sum()
+#         if s <= 0:
+#             # Fallback to uniform if all weights zero within this macro
+#             wi = np.ones_like(wi)
+#             s = wi.sum()
+
+#         alpha = wi / s  # distribution over microstates given macro i
+#         # Reduced row i is convex combination of micro-rows aggregated into macrostates
+#         P_red[i, :] = alpha @ T[micro, :]
+
+
+#     # Safely renormalize to ensure row-stochastic (handles tiny floating error)
+#     # row_sums = P_red.sum(axis=1, keepdims=True)
+#     # with np.errstate(invalid="ignore", divide="ignore"):
+#     #     P_red = np.where(row_sums > 0, P_red / row_sums, P_red)
+
+#     return P_red, labels, B
+
+
 def reduce_markov_chain(P, assignment, weights=None, renormalize=True, atol=1e-12):
     """
     Given a row-stochastic transition matrix P and a mapping of microstates to metastates,
@@ -416,7 +547,10 @@ def reduce_markov_chain(P, assignment, weights=None, renormalize=True, atol=1e-1
 
     # Weighted averaging of rows within each metastate:
     # P_red[a,b] = (sum_{i in a} w_i * Q[i,b]) / (sum_{i in a} w_i)
-    P_reduced_num = (w[:, None] * Q).T @ S  # (M,N)@(N,M) -> (M,M) but via transpose trick
+
+    # P_reduced_num = (w[:, None] * Q).T @ S  # (M,N)@(N,M) -> (M,M) but via transpose trick
+    P_reduced_num = S.T @ (w[:, None] * Q)
+   
     # The above line is a bit opaque; clearer equivalent:
     # P_reduced_num = np.zeros((M, M))
     # for i in range(N): P_reduced_num[inv[i], :] += w[i] * Q[i, :]
@@ -495,6 +629,12 @@ class SymbolicMarkovChain:
         Returns:
             self (SymbolicMarkovChain): The fitted SymbolicMarkovChain.
         """
+        ## If K is "auto", set it to the number of symbols that allows for 100 timepoints
+        ## per symbol
+        if K == "auto":
+            N, d = X.shape
+            K = int(max(N / 100, N**(d/(d+2))))
+
         if T is not None:
             # Validate and sort by time
             T = np.asarray(T).astype(float).ravel()
