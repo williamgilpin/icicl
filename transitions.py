@@ -1,3 +1,13 @@
+"""
+Utilities to estimate k-mer transition matrices from autoregressive models.
+
+This module provides several algorithms to compute or approximate the transition
+probabilities between k-length token blocks ("k-mers") using a language model
+and a corpus of sliding-window contexts. Implementations trade off exactness,
+speed, and memory usage, and include Monte Carlo sampling, exact aggregation
+over grouped contexts, and faster variants with chunking and optimized indexing.
+"""
+
 import torch
 import torch.nn.functional as F
 
@@ -182,7 +192,28 @@ def transition_probs2(
     fix_dangling: bool = False,
 ) -> torch.Tensor:
     """
-    Compute transition probabilities using a two-step approach.
+    Compute transition probabilities by grouping identical tail contexts and
+    averaging model next-token distributions for each group.
+
+    Briefly: this groups rows of `test_tensor` by their last k tokens, computes
+    the mean next-token distribution per group using the model, and then maps
+    those token probabilities to k-mer transitions that are reachable by a
+    one-step shift.
+
+    In more detail:
+      1) Extract the last k tokens of every context row (the "tail" k-mer) and
+         group identical tails with `torch.unique`, producing groups of rows.
+      2) Build a fast hash-based join from `kmers_unique` to the tail groups, so
+         each start k-mer index i either maps to a group id or is marked missing.
+      3) Precompute a mapping from each start k-mer i to the set of next k-mers
+         j that are reachable by a one-token shift, i.e. prefix(kmer_j) ==
+         suffix(kmer_i). This is implemented via hashing of (k-1)-length
+         prefixes/suffixes to avoid O(K^2) comparisons.
+      4) For each start k-mer i with matching contexts, run the model on all
+         rows in the corresponding group, average the resulting token
+         probabilities, and assign those probabilities to the reachable next
+         k-mers j using their last token.
+      5) Optionally normalize rows and/or fix dangling rows.
 
     Args:
         test_tensor: Sliding-window inputs ending with a k-mer (token ids), shape [B, T].
@@ -613,12 +644,45 @@ def transition_probs_fast(
     chunk_k: int | None = None,   # optional: split K to reduce peak memory
 ) -> torch.Tensor:
     """
-    Faster variant of transition_probs.
+    Faster variant of `transition_probs` that scores all candidate next k-mers
+    per start k-mer using vectorized log-prob accumulation.
 
-    Key changes:
-      - inference_mode (faster than no_grad)
-      - avoids arange-based advanced indexing; uses reshape+gather
-      - optional chunking over K to cap memory
+    Briefly: for each start k-mer, it finds all matching context rows, then
+    computes the log-probability of every candidate next k-mer by running the
+    model on appropriately constructed inputs and accumulating token log-probs.
+    It uses `inference_mode`, avoids arange-based fancy indexing, and can chunk
+    over K to cap memory.
+
+    In more detail:
+      1) Extract the last L tokens from each row of `test_tensor` and group
+         identical tails. A hash join maps each `kmers_unique` row to a tail
+         group id (or -1 if unseen).
+      2) For each start k-mer i, gather the rows whose tail equals that k-mer.
+         These rows provide the contexts for estimating P(next_kmer | kmer_i).
+      3) For each candidate next k-mer j (optionally in chunks), construct model
+         inputs for each position t=0..L-1 by splicing the context suffix with
+         the length-t prefix of k-mer j. This produces inputs that correspond to
+         autoregressive scoring of the k-mer tokens.
+      4) Run the model to obtain logits, take log-softmax, and gather the
+         log-prob for the required token at each position t. Sum across t to get
+         log P(kmer_j | context row).
+      5) Aggregate across context rows using log-mean-exp to obtain the final
+         log probability for (i, j), then softmax across j to form a row of the
+         transition matrix. Optional `fix_dangling` replaces empty rows with
+         uniform probabilities.
+
+    Args:
+        test_tensor: Sliding-window inputs ending with a k-mer (token ids), shape [B, T].
+        kmers_unique: Unique k-mers (length k), shape [K, k].
+        model: Autoregressive next-token model: logits = model(x) with logits[..., vocab].
+        use_compile: If True and supported, wraps the model with torch.compile.
+        fix_dangling: If True, replace rows with no matched contexts (all -inf logits)
+            by a uniform distribution over kmers.
+        chunk_k: Optional: split K to reduce peak memory.
+        
+    Returns:
+        (FloatTensor[K, K]): Row k -> starting kmer index; column j -> prob of appending 
+            kmers_unique[j].
     """
     device = next(model.parameters()).device
     test_tensor = test_tensor.to(device, non_blocking=True)
