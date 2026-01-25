@@ -12,6 +12,8 @@ from models import load_model
 
 order = 8
 
+device = "mps"
+
 VOCAB_SIZE = 100
 # N_TRAIN = 2*40_000
 # N_TEST = 1000
@@ -44,7 +46,7 @@ for _ in range(50):
     overall_name = eq_name + "_" + eq_name_target
     print(overall_name, flush=True)
 
-    model = load_model(model_path, device="mps")
+    model = load_model(model_path, device=device)
 
     ## Load the losses
     losses = np.load(loss_path, allow_pickle=True)
