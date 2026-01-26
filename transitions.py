@@ -184,6 +184,85 @@ def transition_probs_mc(
 
 
 @torch.no_grad()
+def transition_probs_mc_greedy_one_step(
+    test_tensor: torch.Tensor,       # [B, T] long
+    kmers_unique: torch.Tensor,      # [K, k] long
+    model,
+    temperature: float = 0.0,
+    use_compile: bool = False,
+    fix_dangling: bool = False,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """
+    A an accelerated version of transition_probs_mc that only samples the next step
+    at zero temperature.
+    """
+    ## Torch set up and compile
+    device = next(model.parameters()).device
+    test_tensor = test_tensor.to(device, non_blocking=True)
+    kmers_unique = kmers_unique.to(device, non_blocking=True)
+    if use_compile and hasattr(torch, "compile"):
+        model = torch.compile(model)
+
+    ## Check input sizes
+    B, T = test_tensor.shape
+    K, k = kmers_unique.shape
+    assert k > 1 and T >= k
+
+    next_tokens = model(test_tensor[:, -k:])[:, -1, :]
+    next_tokens = next_tokens.argmax(dim=-1)
+    prefixes = test_tensor[:, -k:]
+    suffixes = torch.cat([prefixes[:, 1:], next_tokens.view(-1, 1)], dim=1)[:, -k:]
+    
+    # # ---- hash-based mapping from kmer -> index in kmers_unique ----
+    # vocab_upper = int(max(test_tensor.max().item(), kmers_unique.max().item())) + 1
+    # base = max(vocab_upper + 1, 1024)
+    # powv = (base ** torch.arange(k, device=device, dtype=torch.long)).view(1, k)
+    # keys = (kmers_unique.long() * powv).sum(dim=1)  # [K]
+    # keys_sorted, order = torch.sort(keys)
+
+    def lookup_index(kmer_block: torch.Tensor) -> torch.Tensor:
+        """
+        Map each k-mer in kmer_block to the index of the closest row in kmers_unique
+        under Euclidean distance.
+
+        Args:
+            kmer_block (LongTensor[N, k]): k-mers to map.
+
+        Returns:
+            LongTensor[N]: indices in [0..K-1] (always defined).
+        """
+        d = torch.cdist(kmer_block.to(torch.float32), kmers_unique.to(torch.float32))  # [N, K]
+        return d.argmin(dim=1)
+
+    counts = torch.zeros((K, K), device=device, dtype=torch.float32)
+    i_idx = lookup_index(prefixes)
+    j_idx = lookup_index(suffixes)
+    valid = (i_idx >= 0) & (j_idx >= 0)
+    ii = i_idx[valid]
+    jj = j_idx[valid]
+    counts.index_put_((ii, jj), torch.ones_like(ii, dtype=counts.dtype), accumulate=True)
+
+    # Row-normalize to get probabilities
+    row_sum = counts.sum(dim=-1, keepdim=True)
+    if fix_dangling:
+        dangling = (row_sum.squeeze(-1) == 0)
+        probs_out = torch.empty_like(counts)
+        if dangling.any():
+            probs_out[dangling] = 1.0 / K
+        non = ~dangling
+        probs_out[non] = counts[non] / row_sum[non]
+        return probs_out
+
+    if normalize:
+        row_sum = row_sum.clamp_min(1e-30)
+        return counts / row_sum
+    else:
+        return counts
+
+
+
+@torch.no_grad()
 def transition_probs2(
     test_tensor: torch.Tensor,      # [B, T] long
     kmers_unique: torch.Tensor,     # [K, k] long
