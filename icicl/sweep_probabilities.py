@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from scipy.spatial.distance import cdist
 from scipy.stats import spearmanr, entropy
-from transitions import transition_probs_mc, transition_probs2
+from transitions import transition_probs_mc, transition_probs2, transition_probs_mc_greedy_one_step
 from operators import SymbolicMarkovChain, invariant_distribution, reduce_markov_chain
 from models import load_model
 
@@ -96,7 +96,7 @@ for _ in range(50):
 
     all_spearman, all_kldiv = [], []
     all_all_eig_spearman = []
-    all_entropy_model, all_entropy_model_dist, all_entropy_model_empirical = [], [], []
+    all_entropy_true_invariant, all_entropy_model_invariant, all_entropy_model_empirical = [], [], []
     model_paths = sorted(glob.glob("./private_data/training_run/ckpt_*.pt"))
     for model_path in model_paths:
         print(f"Evaluating {model_path}", flush=True)
@@ -106,13 +106,11 @@ for _ in range(50):
         model.eval()
         torch.set_grad_enabled(False)
 
-        # P = transition_probs2(test_tensor, kmers_unique, model, use_compile=True)
-        # P_reduced = reduce_markov_chain(P, kgram_map, weights=invariant_distribution(P))
-        # print(f"Fraction of finite values: {torch.isfinite(P).sum() / P.numel()}")
 
+        ## Stochastic decoding
         K = len(centroid_kgrams)
         P_reduced_sum = torch.zeros((K, K))
-        for ind in range(400):
+        for ind in range(400 * 4):
             if ind % 100 == 0:
                 print(f"Running {ind}", flush=True)
             P_reduced = transition_probs_mc(
@@ -121,7 +119,7 @@ for _ in range(50):
                 model,
                 # ground_truth=True,
                 shift=1,
-                n_input_samples=2000, 
+                n_input_samples=2000 // 4, 
                 n_samples_per_input=1,
                 temperature=0.00001,
                 use_compile=True,
@@ -133,6 +131,14 @@ for _ in range(50):
         row_sum  = row_sum.clamp_min(1e-30)
         P_reduced = P_reduced / row_sum
 
+
+        ## Greedy one-step decoding
+        # P_reduced = transition_probs_mc_greedy_one_step(
+        #     test_tensor, torch.tensor(centroid_kgrams), model,
+        #     use_compile=True,
+        # )
+        
+        ## Exact decoding
         # P = transition_probs2(test_tensor, kmers_unique, model, use_compile=True)
         # P_reduced = reduce_markov_chain(P, kgram_map, weights=invariant_distribution(P))
 
@@ -157,10 +163,10 @@ for _ in range(50):
         entropy_model = entropy(probs, axis=-1)
         average_entropy_model_empirical = entropy_model.mean()
         average_entropy_model_dist = entropy(pi_dist_model)
-        average_entropy_true = entropy(pi_dist_model)
-        all_entropy_model.append(average_entropy_model_empirical)
-        all_entropy_model_dist.append(average_entropy_model_dist)
-        all_entropy_model_empirical.append(average_entropy_true)
+        average_entropy_true_dist = entropy(pi_dist_symbolic)
+        all_entropy_true_invariant.append(average_entropy_true_dist)
+        all_entropy_model_invariant.append(average_entropy_model_dist)
+        all_entropy_model_empirical.append(average_entropy_model_empirical)
 
 
         print(f"Spearman r={all_spearman[-1]:.2f}, KLD={all_kldiv[-1]:.2f}")
@@ -171,7 +177,7 @@ for _ in range(50):
     np.array(all_spearman).dump(f"private_data/invariant_spearman_{overall_name}2.pkl")
     np.array(all_kldiv).dump(f"private_data/invariant_kldiv_{overall_name}2.pkl")
     np.array(val_losses_ood).dump(f"private_data/val_losses_ood_{overall_name}2.pkl")
-    np.array(all_entropy_model).dump(f"private_data/entropy_model_{overall_name}2.pkl")
-    np.array(all_entropy_model_dist).dump(f"private_data/entropy_model_dist_{overall_name}2.pkl")
+    np.array(all_entropy_true_invariant).dump(f"private_data/entropy_true_invariant_{overall_name}2.pkl")
+    np.array(all_entropy_model_invariant).dump(f"private_data/entropy_model_invariant_{overall_name}2.pkl")
     np.array(all_entropy_model_empirical).dump(f"private_data/entropy_model_empirical_{overall_name}2.pkl")
-# Spearman r=0.59, KLD=51.33
+
