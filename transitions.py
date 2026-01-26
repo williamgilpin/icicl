@@ -196,6 +196,18 @@ def transition_probs_mc_greedy_one_step(
     """
     A an accelerated version of transition_probs_mc that only samples the next step
     at zero temperature.
+
+    Args:
+        test_tensor (torch.Tensor): Context windows [B, T] (token ids).
+        kmers_unique (torch.Tensor): Candidate k-mers [K, k] (token ids).
+        model: Autoregressive model returning logits of shape [N, S, V] for input [N, S].
+        temperature (float): Sampling temperature (1.0 = standard).
+        use_compile (bool): If True and supported, wraps model with torch.compile.
+        fix_dangling (bool): If True, rows with no counts become uniform over K.
+        normalize (bool): If True, row-normalize the transition matrix.
+
+    Returns:
+        torch.Tensor: FloatTensor[K, K] row-stochastic transition matrix estimate.
     """
     ## Torch set up and compile
     device = next(model.parameters()).device
@@ -214,13 +226,6 @@ def transition_probs_mc_greedy_one_step(
     prefixes = test_tensor[:, -k:]
     suffixes = torch.cat([prefixes[:, 1:], next_tokens.view(-1, 1)], dim=1)[:, -k:]
     
-    # # ---- hash-based mapping from kmer -> index in kmers_unique ----
-    # vocab_upper = int(max(test_tensor.max().item(), kmers_unique.max().item())) + 1
-    # base = max(vocab_upper + 1, 1024)
-    # powv = (base ** torch.arange(k, device=device, dtype=torch.long)).view(1, k)
-    # keys = (kmers_unique.long() * powv).sum(dim=1)  # [K]
-    # keys_sorted, order = torch.sort(keys)
-
     def lookup_index(kmer_block: torch.Tensor) -> torch.Tensor:
         """
         Map each k-mer in kmer_block to the index of the closest row in kmers_unique
