@@ -11,12 +11,6 @@ EPOCHS = 60_000
 from models import ChronosTokenizer
 tokenizer = ChronosTokenizer(VOCAB_SIZE, -3, 3)
 
-# VOCAB_SIZE = 100
-# N_TRAIN = 5_000
-# N_TEST = 1000
-# CONTEXT_LENGTH = 32*4
-# EPOCHS = 1_000
-
 from dysts.systems import get_attractor_list
 import dysts.flows
 import datetime
@@ -33,7 +27,7 @@ all_attractors = get_attractor_list(sys_class="continuous_no_delay")
 # seen_models = [item.split("_")[5] for item in all_model_paths]
 # all_attractors = [item for item in all_attractors if item not in seen_models]
 
-np.random.seed(1)
+np.random.seed(2)
 num_systems = len(all_attractors)
 training_systems = np.random.choice(all_attractors, size=num_systems, replace=False)
 test_systems = np.random.choice(all_attractors, size=num_systems, replace=False)
