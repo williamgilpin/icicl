@@ -25,5 +25,5 @@ The utilities for the experiments are:
 
 `markov.py` and `operators.py` contain the functions for computing ground truth transition probabilities from a dynamical system.
 
-`incontext.ipynb` is a notebook for analyzing the results of the experiments.
+`analyze_embedding_dimension.ipynb` is a notebook for analyzing trained models to probe how the properties of the transformers change with the embedding dimension.
 
