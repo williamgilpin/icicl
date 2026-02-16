@@ -5,8 +5,9 @@
 !*/
 
 # Include analysis notebooks and documentation
-*.md
-*.py
+!*.md
+!*.py
+!README.md
 !uv.lock
 !.gitignore
 !pyproject.toml
