@@ -1,9 +1,6 @@
 # Ignore everything
 *
 
-# Allow directories to be traversed
-!*/
-
 # Include analysis notebooks and documentation
 !*.md
 !*.py
