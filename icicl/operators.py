@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.cluster import KMeans
 from scipy.stats import entropy
+import warnings
 
 def predictive_information(P, base=np.e):
     """
@@ -28,8 +29,6 @@ def predictive_information(P, base=np.e):
     # Numerical guard against tiny negative due to floating error
     return float(max(I, -1e-12))
 
-
-import warnings
 
 def row_quality_score(P, counts=None, N0=50.0, eps=1e-12):
     """
@@ -742,7 +741,7 @@ def reduce_markov_chain(P, assignment, weights=None, renormalize=True, atol=1e-1
     return P_reduced
 
 
-from clustering import UniformGridClusterer
+from .clustering import UniformGridClusterer
 
 class SymbolicMarkovChain:
     """

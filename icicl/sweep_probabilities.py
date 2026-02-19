@@ -6,9 +6,9 @@ import torch.nn.functional as F
 
 from scipy.spatial.distance import cdist
 from scipy.stats import spearmanr, entropy
-from transitions import transition_probs_mc, transition_probs2, transition_probs_mc_greedy_one_step
-from operators import SymbolicMarkovChain, invariant_distribution, reduce_markov_chain
-from models import load_model
+from .transitions import transition_probs_mc, transition_probs2, transition_probs_mc_greedy_one_step
+from .operators import SymbolicMarkovChain, invariant_distribution, reduce_markov_chain
+from .models import load_model
 
 order = 8
 
@@ -55,7 +55,7 @@ for _ in range(50):
     ## Make the test data and tokenize it
     traj_test_out = np.load(data_path, allow_pickle=True)
     x_test_out = traj_test_out[:, 0]
-    from models import ChronosTokenizer
+    from .models import ChronosTokenizer
     tokenizer = ChronosTokenizer(VOCAB_SIZE, -3, 3)
     tok_test_out, aux = tokenizer.encode_series(x_test_out, 100, 10)
     ## Compute fully-observed transition matrix
@@ -97,7 +97,7 @@ for _ in range(50):
     all_spearman, all_kldiv = [], []
     all_all_eig_spearman = []
     all_entropy_true_invariant, all_entropy_model_invariant, all_entropy_model_empirical = [], [], []
-    model_paths = sorted(glob.glob("./private_data/training_run/ckpt_*.pt"))
+    model_paths = sorted(glob.glob("../private_data/training_run/ckpt_*.pt"))
     for model_path in model_paths:
         print(f"Evaluating {model_path}", flush=True)
         model = load_model(model_path, device="cpu")
