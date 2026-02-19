@@ -11,13 +11,15 @@ In-context learning traces coherent structures in transformers trained on dynami
 + torch
 + [dysts](https://github.com/GilpinLab/dysts)
 
-### Contents
+### Usage
 
 The main experimental results are given by notebooks:
 
 `train_single_model.ipynb` is a notebook for training a single model on a single dynamical system, showing out-of-distribution generalization performance and double descent behavior.
 
 `analyze_embedding_dimension.ipynb` is a notebook for analyzing trained models to probe how the properties of the transformers change with the embedding dimension.
+
+### Contents
 
 In order to run for multiple randomly-sampled dynamical systems, the scrips for running the experiments are:
 
