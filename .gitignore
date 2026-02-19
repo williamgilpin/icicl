@@ -3,9 +3,11 @@
 
 # Include analysis notebooks and documentation
 !*.md
+!data/*
 !*.py
 !README.md
 !uv.lock
 !.gitignore
 !pyproject.toml
+!train_single_model.ipynb
 !analyze_embedding_dimension.ipynb
