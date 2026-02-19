@@ -15,5 +15,5 @@
 
 # Demo notebooks
 !train_single_model.ipynb
-!analyze_embedding_dimension.ipynb
+!measure_embedding_dimension.ipynb
 !estimate_transfer_operator.ipynb
