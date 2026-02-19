@@ -1,14 +1,19 @@
-# Ignore everything
 *
 
-# Include analysis notebooks and documentation
-!*.md
+# Core code and data
 !data/
 !data/*
-!*.py
+!icicl/
+!icicl/*
+
+# Documentation and configuration files
+!*.md
 !README.md
 !uv.lock
 !.gitignore
 !pyproject.toml
+
+# Demo notebooks
 !train_single_model.ipynb
 !analyze_embedding_dimension.ipynb
+!estimate_transfer_operator.ipynb
