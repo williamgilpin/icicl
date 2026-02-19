@@ -2,7 +2,7 @@
 
 In-context learning of transfer operators in transformers trained on dynamical systems.
 
-<img src="resources/github.ong" alt="Transfer operator of a trained model" width="100%"/>
+<img src="data/github.ong" alt="Transfer operator of a trained model" width="100%"/>
 
 ### Dependencies
 
