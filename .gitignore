@@ -3,7 +3,7 @@
 
 # Include analysis notebooks and documentation
 !*.md
-!data/*
+!data/
 !*.py
 !README.md
 !uv.lock
