@@ -3,6 +3,10 @@ from numpy.lib.stride_tricks import sliding_window_view
 from itertools import combinations
 from typing import List, Tuple
 
+from scipy.stats import entropy
+# js entropy?
+
+
 def next_token_empirical_probs(corpus: np.ndarray,
                                queries: np.ndarray,
                                L: int,
@@ -305,79 +309,6 @@ def next_token_empirical_probs_custom_comb(
     return probs, combs
 
 
-# def next_token_empirical_probs_custom_comb(
-#     corpus: np.ndarray,
-#     queries: np.ndarray,
-#     combs: List[Tuple[int, ...]],
-#     L: int = None,
-# ) -> Tuple[np.ndarray, List[Tuple[int, ...]]]:
-#     """
-#     Empirical next-token probabilities for *all* k-gram position subsets
-#     (non-consecutive allowed) chosen from the C-length prefix.
-
-#     For each subset of positions S ⊂ {0,…,C-1} with |S|=k (0-based indices,
-#     where C-1 is the most recent token before the next-token), this computes
-#     P(x_{t} | x_{t-C:t-1}[S]) from the corpus and evaluates it for each query.
-
-#     Args:
-#         corpus (np.ndarray): 1D int array of tokens (vocab size L).
-#         queries (np.ndarray): 2D int array of shape (B, C) with query prefixes.
-#         combs (List[Tuple[int, ...]]): List of position tuples (in lexicographic order) used
-#                    to index the first dimension of probs.
-#         L (int): Vocabulary size (tokens in [0, L-1]).
-
-#     Returns:
-#         (np.ndarray, List[Tuple[int,...]]):
-#             probs: float array of shape (M, B, L), where M = comb(C, k).
-#                    probs[m, b] is the empirical distribution over next token
-#                    for query b using the position subset combs[m].
-#                    If a k-gram was unseen in the corpus, that row is np.nan.
-#             combs: list of the position tuples (in lexicographic order) used
-#                    to index the first dimension of probs.
-
-#     Raises:
-#         ValueError: On invalid inputs.
-#     """
-#     if queries.ndim != 2:
-#         raise ValueError("queries must be a 2D array (B, C).")
-#     if corpus.ndim != 1:
-#         raise ValueError("corpus must be a 1D array.")
-#     B, C = queries.shape
-
-#     if L is None:
-#         L = len(np.unique(corpus))
-
-#     w = sliding_window_view(corpus, C + 1)        # shape: (N - C, C+1)
-#     past = w[:, :C]                                # (N - C, C)
-#     nxt  = w[:, -1]                                # (N - C,)
-
-#     probs = np.full((len(combs), B, L), np.nan, dtype=float)
-
-#     # For each position subset, build an empirical model from the corpus and evaluate on queries
-#     for m, comb in enumerate(combs):
-#         ctx = past[:, comb]                        # (N - C, k) where k is the number of indices in comb
-
-#         # Deduplicate the observed k-grams and count next tokens
-#         keys, inv = np.unique(ctx, axis=0, return_inverse=True)  # keys: (M_k, k)
-#         counts = np.zeros((keys.shape[0], L), dtype=np.int64)
-#         np.add.at(counts, (inv, nxt), 1)
-
-#         totals = counts.sum(axis=1, keepdims=True)
-#         with np.errstate(invalid="ignore", divide="ignore"):
-#             probs_by_key = counts / totals
-
-#         # Fast lookup dict for query contexts
-#         key_map = {tuple(row): i for i, row in enumerate(keys)}
-
-#         # Evaluate each query prefix under this subset
-#         qctx = queries[:, comb]                    # (B, k)
-#         for b in range(B):
-#             idx = key_map.get(tuple(qctx[b]))
-#             if idx is not None and totals[idx, 0] > 0:
-#                 probs[m, b] = probs_by_key[idx]
-
-#     return np.array(probs), combs
-
 import torch
 @torch.inference_mode()
 def estimate_positionwise_marginals(
@@ -450,3 +381,145 @@ def estimate_positionwise_marginals(
         pos_conds[k] = (counts[k] / denom).to("cpu") # (V,V)
 
     return pos_conds
+
+def teacher_projected_markov_probs(train_tensor_np, probs, combs):
+    """
+    Build the KL-optimal Markov approximation of the teacher distribution for each comb.
+
+    Args:
+        train_tensor_np (np.ndarray): Shape (N, CONTEXT_LENGTH). Context windows as token ids.
+        probs (np.ndarray): Shape (N, V). Teacher probs p(y | full context) for each window.
+        combs (list[np.ndarray]): Each array contains context indices to condition on (your existing combs).
+
+    Returns:
+        list[np.ndarray]: probs_proj[k] has shape (N, V) with q_k(y | suffix) = E[p(y)|suffix].
+    """
+    N, V = probs.shape
+    probs_proj = []
+
+    for comb in combs:
+        # suffix tokens used as the Markov state for this order/comb
+        suffix = train_tensor_np[:, comb]  # shape (N, k)
+        # group identical suffixes
+        _, inv = np.unique(suffix, axis=0, return_inverse=True)
+        G = inv.max() + 1
+
+        # sum teacher distributions within each group
+        sums = np.zeros((G, V), dtype=np.float32)
+        np.add.at(sums, inv, probs.astype(np.float32))
+
+        counts = np.bincount(inv).astype(np.float32)  # shape (G,)
+        means = sums / counts[:, None]                # shape (G, V)
+
+        # assign group mean back to each position
+        probs_proj.append(means[inv])
+
+    return probs_proj
+
+
+def kl_sweep_and_marginal_improvement(probs_proj, probs, eps=1e-12):
+    """
+    Args:
+        probs_proj (list[np.ndarray]): Each (N, V), Markov-projected q_k for each comb.
+        probs (np.ndarray): (N, V), teacher p.
+        eps (float): small constant for numerical stability
+
+    Returns:
+        all_kl_div (np.ndarray): (K, N) KL(p || q_k) per position
+        Lk (np.ndarray): (K,) mean KL per k
+        delta (np.ndarray): (K,) marginal improvement L_{k-1} - L_k, with delta[0]=nan
+    """
+    all_kl_div = []
+    for q in probs_proj:
+        # KL(p || q) per position
+        all_kl_div.append(entropy(probs + eps, q + eps, axis=1))
+    all_kl_div = np.array(all_kl_div)        # (K, N)
+
+    Lk = all_kl_div.mean(axis=1)             # (K,)
+    delta = np.empty_like(Lk)
+    delta[0] = np.nan
+    delta[1:] = Lk[:-1] - Lk[1:]             # marginal KL reduction
+
+    return all_kl_div, Lk, delta
+
+
+
+def effective_order_from_delta(delta, k_values=None, rho=0.95):
+    """
+    Compute an "effective order" as the smallest k capturing a fraction rho of total marginal gain.
+
+    Args:
+        delta (np.ndarray): Shape (K,), marginal improvements. delta[0] may be nan.
+        k_values (np.ndarray or None): Shape (K,), the k corresponding to each entry. If None, uses 1..K.
+        rho (float): Target cumulative fraction (e.g., 0.95).
+
+    Returns:
+        dict: {
+            "k_eff": int,
+            "cum_frac": np.ndarray,
+            "total_gain": float,
+        }
+    """
+    if k_values is None:
+        k_values = np.arange(1, len(delta) + 1)
+
+    d = np.array(delta, dtype=np.float64)
+    d[~np.isfinite(d)] = 0.0
+    d = np.maximum(d, 0.0)
+
+    total = d.sum()
+    if total <= 0:
+        return {"k_eff": int(k_values[-1]), "cum_frac": np.zeros_like(d), "total_gain": float(total)}
+
+    cum = np.cumsum(d)
+    frac = cum / total
+    k_eff = int(k_values[np.searchsorted(frac, rho, side="left")])
+
+    return {"k_eff": k_eff, "cum_frac": frac, "total_gain": float(total)}
+
+
+def fit_exponential_decay(delta, k_values=None, min_frac_of_max=1e-3):
+    """
+    Fit log(delta_k) ≈ a - k/tau over the region where delta is above a noise floor.
+
+    Args:
+        delta (np.ndarray): Shape (K,), marginal improvements; delta[0] may be nan.
+        k_values (np.ndarray or None): Shape (K,), k corresponding to each entry. If None, uses 1..K.
+        min_frac_of_max (float): Keep points with delta >= max(delta)*min_frac_of_max.
+
+    Returns:
+        dict: {
+            "tau": float or np.nan,
+            "a": float or np.nan,
+            "used_k": np.ndarray,
+            "used_delta": np.ndarray,
+        }
+    """
+    if k_values is None:
+        k_values = np.arange(1, len(delta) + 1)
+
+    d = np.array(delta, dtype=np.float64)
+    d[~np.isfinite(d)] = 0.0
+    d = np.maximum(d, 0.0)
+
+    dmax = d.max()
+    if dmax <= 0:
+        return {"tau": np.nan, "a": np.nan, "used_k": np.array([]), "used_delta": np.array([])}
+
+    mask = d >= (dmax * float(min_frac_of_max))
+    # also require strictly positive for log
+    mask &= d > 0
+
+    k_use = np.array(k_values, dtype=np.float64)[mask]
+    d_use = d[mask]
+
+    if len(d_use) < 2:
+        return {"tau": np.nan, "a": np.nan, "used_k": k_use, "used_delta": d_use}
+
+    # Fit y = a + b*k where y = log(d), b = -1/tau
+    y = np.log(d_use)
+    X = np.vstack([np.ones_like(k_use), k_use]).T
+    a, b = np.linalg.lstsq(X, y, rcond=None)[0]
+
+    tau = np.inf if b >= 0 else (-1.0 / b)
+    return {"tau": float(tau), "a": float(a), "used_k": k_use, "used_delta": d_use}
