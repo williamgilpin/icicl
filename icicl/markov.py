@@ -3,8 +3,8 @@ from numpy.lib.stride_tricks import sliding_window_view
 from itertools import combinations
 from typing import List, Tuple
 
-from scipy.stats import entropy
-# js entropy?
+# from scipy.stats import entropy
+from .analysis import js_divergence as entropy
 
 
 def next_token_empirical_probs(corpus: np.ndarray,
@@ -444,82 +444,82 @@ def kl_sweep_and_marginal_improvement(probs_proj, probs, eps=1e-12):
 
 
 
-def effective_order_from_delta(delta, k_values=None, rho=0.95):
-    """
-    Compute an "effective order" as the smallest k capturing a fraction rho of total marginal gain.
+# def effective_order_from_delta(delta, k_values=None, rho=0.95):
+#     """
+#     Compute an "effective order" as the smallest k capturing a fraction rho of total marginal gain.
 
-    Args:
-        delta (np.ndarray): Shape (K,), marginal improvements. delta[0] may be nan.
-        k_values (np.ndarray or None): Shape (K,), the k corresponding to each entry. If None, uses 1..K.
-        rho (float): Target cumulative fraction (e.g., 0.95).
+#     Args:
+#         delta (np.ndarray): Shape (K,), marginal improvements. delta[0] may be nan.
+#         k_values (np.ndarray or None): Shape (K,), the k corresponding to each entry. If None, uses 1..K.
+#         rho (float): Target cumulative fraction (e.g., 0.95).
 
-    Returns:
-        dict: {
-            "k_eff": int,
-            "cum_frac": np.ndarray,
-            "total_gain": float,
-        }
-    """
-    if k_values is None:
-        k_values = np.arange(1, len(delta) + 1)
+#     Returns:
+#         dict: {
+#             "k_eff": int,
+#             "cum_frac": np.ndarray,
+#             "total_gain": float,
+#         }
+#     """
+#     if k_values is None:
+#         k_values = np.arange(1, len(delta) + 1)
 
-    d = np.array(delta, dtype=np.float64)
-    d[~np.isfinite(d)] = 0.0
-    d = np.maximum(d, 0.0)
+#     d = np.array(delta, dtype=np.float64)
+#     d[~np.isfinite(d)] = 0.0
+#     d = np.maximum(d, 0.0)
 
-    total = d.sum()
-    if total <= 0:
-        return {"k_eff": int(k_values[-1]), "cum_frac": np.zeros_like(d), "total_gain": float(total)}
+#     total = d.sum()
+#     if total <= 0:
+#         return {"k_eff": int(k_values[-1]), "cum_frac": np.zeros_like(d), "total_gain": float(total)}
 
-    cum = np.cumsum(d)
-    frac = cum / total
-    k_eff = int(k_values[np.searchsorted(frac, rho, side="left")])
+#     cum = np.cumsum(d)
+#     frac = cum / total
+#     k_eff = int(k_values[np.searchsorted(frac, rho, side="left")])
 
-    return {"k_eff": k_eff, "cum_frac": frac, "total_gain": float(total)}
+#     return {"k_eff": k_eff, "cum_frac": frac, "total_gain": float(total)}
 
 
-def fit_exponential_decay(delta, k_values=None, min_frac_of_max=1e-3):
-    """
-    Fit log(delta_k) ≈ a - k/tau over the region where delta is above a noise floor.
+# def fit_exponential_decay(delta, k_values=None, min_frac_of_max=1e-3):
+#     """
+#     Fit log(delta_k) ≈ a - k/tau over the region where delta is above a noise floor.
 
-    Args:
-        delta (np.ndarray): Shape (K,), marginal improvements; delta[0] may be nan.
-        k_values (np.ndarray or None): Shape (K,), k corresponding to each entry. If None, uses 1..K.
-        min_frac_of_max (float): Keep points with delta >= max(delta)*min_frac_of_max.
+#     Args:
+#         delta (np.ndarray): Shape (K,), marginal improvements; delta[0] may be nan.
+#         k_values (np.ndarray or None): Shape (K,), k corresponding to each entry. If None, uses 1..K.
+#         min_frac_of_max (float): Keep points with delta >= max(delta)*min_frac_of_max.
 
-    Returns:
-        dict: {
-            "tau": float or np.nan,
-            "a": float or np.nan,
-            "used_k": np.ndarray,
-            "used_delta": np.ndarray,
-        }
-    """
-    if k_values is None:
-        k_values = np.arange(1, len(delta) + 1)
+#     Returns:
+#         dict: {
+#             "tau": float or np.nan,
+#             "a": float or np.nan,
+#             "used_k": np.ndarray,
+#             "used_delta": np.ndarray,
+#         }
+#     """
+#     if k_values is None:
+#         k_values = np.arange(1, len(delta) + 1)
 
-    d = np.array(delta, dtype=np.float64)
-    d[~np.isfinite(d)] = 0.0
-    d = np.maximum(d, 0.0)
+#     d = np.array(delta, dtype=np.float64)
+#     d[~np.isfinite(d)] = 0.0
+#     d = np.maximum(d, 0.0)
 
-    dmax = d.max()
-    if dmax <= 0:
-        return {"tau": np.nan, "a": np.nan, "used_k": np.array([]), "used_delta": np.array([])}
+#     dmax = d.max()
+#     if dmax <= 0:
+#         return {"tau": np.nan, "a": np.nan, "used_k": np.array([]), "used_delta": np.array([])}
 
-    mask = d >= (dmax * float(min_frac_of_max))
-    # also require strictly positive for log
-    mask &= d > 0
+#     mask = d >= (dmax * float(min_frac_of_max))
+#     # also require strictly positive for log
+#     mask &= d > 0
 
-    k_use = np.array(k_values, dtype=np.float64)[mask]
-    d_use = d[mask]
+#     k_use = np.array(k_values, dtype=np.float64)[mask]
+#     d_use = d[mask]
 
-    if len(d_use) < 2:
-        return {"tau": np.nan, "a": np.nan, "used_k": k_use, "used_delta": d_use}
+#     if len(d_use) < 2:
+#         return {"tau": np.nan, "a": np.nan, "used_k": k_use, "used_delta": d_use}
 
-    # Fit y = a + b*k where y = log(d), b = -1/tau
-    y = np.log(d_use)
-    X = np.vstack([np.ones_like(k_use), k_use]).T
-    a, b = np.linalg.lstsq(X, y, rcond=None)[0]
+#     # Fit y = a + b*k where y = log(d), b = -1/tau
+#     y = np.log(d_use)
+#     X = np.vstack([np.ones_like(k_use), k_use]).T
+#     a, b = np.linalg.lstsq(X, y, rcond=None)[0]
 
-    tau = np.inf if b >= 0 else (-1.0 / b)
-    return {"tau": float(tau), "a": float(a), "used_k": k_use, "used_delta": d_use}
+#     tau = np.inf if b >= 0 else (-1.0 / b)
+#     return {"tau": float(tau), "a": float(a), "used_k": k_use, "used_delta": d_use}
