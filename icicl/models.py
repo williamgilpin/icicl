@@ -2,7 +2,7 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Tuple, Optional, Dict
 
-import math, torch
+import math, pickle, torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
@@ -637,14 +637,22 @@ def save_checkpoint(path: str, model: TinyCausalLM, optimizer: torch.optim.Optim
     torch.save(ckpt, path)
 
 def load_model(path: str, device: str | torch.device = "cpu") -> TinyCausalLM:
-    ckpt = torch.load(path, map_location=device)
+    try:
+        ckpt = torch.load(path, map_location=device, weights_only=True)
+    except pickle.UnpicklingError:
+        ckpt = torch.load(path, map_location=device, weights_only=False)
+
     m = TinyCausalLM(**ckpt["config"]).to(device)
     m.load_state_dict(ckpt["state_dict"])
     m.eval()
     return m
 
 def load_for_training(path: str, device: str | torch.device, lr: float, weight_decay: float = 0.0):
-    ckpt = torch.load(path, map_location=device)
+    try:
+        ckpt = torch.load(path, map_location=device, weights_only=True)
+    except pickle.UnpicklingError:
+        ckpt = torch.load(path, map_location=device, weights_only=False)
+
     m = TinyCausalLM(**ckpt["config"]).to(device)
     m.load_state_dict(ckpt["state_dict"])
     opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=weight_decay)
@@ -653,3 +661,18 @@ def load_for_training(path: str, device: str | torch.device, lr: float, weight_d
     start_step = ckpt.get("step", 0)
     m.train()
     return m, opt, start_step
+
+def correct_linear_deviation(x, y, strength=0.8):
+    """
+    Correct for linear deviation of y from x.
+    Args:
+        x: The x values to correct, shape (N,).
+        y: The y values to correct, shape (N, M).
+        strength: The strength of the correction.
+    Returns:
+        The corrected y values, shape (N, M).
+    """
+    coef = np.polyfit(x, y, 1)
+    y_approx = coef[0] * x + coef[1]
+    y_corrected = strength * y_approx + (1 - strength) * y
+    return y_corrected
