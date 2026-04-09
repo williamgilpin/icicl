@@ -1,5 +1,8 @@
 import torch
 from typing import List, Literal, Optional
+import numpy as np
+from scipy.stats import entropy
+from scipy.special import rel_entr
 
 def attention_flow(
     attns: List[torch.Tensor],
@@ -251,8 +254,7 @@ def participation_ratio_1d(vals: torch.Tensor):
     vals = vals / vals.sum()
     return 1.0 / vals.sum()**2
 
-from scipy.special import rel_entr
-import numpy as np
+
 def js_divergence(p, q, smooth=None, base=None, axis=None):
     """
     Jensen-Shannon (JS) divergence between two probability distributions.
@@ -324,3 +326,32 @@ def cross_entropy(logits, targets):
     lse = logsumexp(x, axis=1)                 # shape (N,)
     correct = x[np.arange(N), t]               # shape (N,)
     return (lse - correct)
+
+
+def entropy_smooth(pk, qk=None, base=None, axis=0, alpha=1.0):
+    """
+    Compute scipy.stats.entropy with optional additive smoothing.
+
+    Args:
+        pk (array-like): Defines the distribution ``p``.
+        qk (array-like, optional): Defines the distribution ``q``.
+        base (float, optional): Logarithm base.
+        axis (int, optional): Axis along which to compute the entropy.
+        alpha (float, optional): Additive smoothing constant. Must be >= 0.
+
+    Returns:
+        np.ndarray or float: Entropy or KL divergence.
+    """
+    if alpha < 0:
+        raise ValueError("alpha must be >= 0")
+
+    pk = np.asarray(pk)
+    if alpha != 0.0:
+        pk = pk + alpha
+
+    if qk is not None:
+        qk = np.asarray(qk)
+        if alpha != 0.0:
+            qk = qk + alpha
+
+    return entropy(pk, qk=qk, base=base, axis=axis)
