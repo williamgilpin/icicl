@@ -27,7 +27,7 @@ all_attractors = get_attractor_list(sys_class="continuous_no_delay")
 # seen_models = [item.split("_")[5] for item in all_model_paths]
 # all_attractors = [item for item in all_attractors if item not in seen_models]
 
-np.random.seed(2)
+np.random.seed(89)
 num_systems = len(all_attractors)
 training_systems = np.random.choice(all_attractors, size=num_systems, replace=False)
 test_systems = np.random.choice(all_attractors, size=num_systems, replace=False)
@@ -50,7 +50,8 @@ for train_name, test_name in zip(training_systems, test_systems):
 
     print(train_name, test_name, flush=True)
     ## Make a new subfolder for the training run, unless it already exists
-    subfolder = f"./private_data/training_run/{train_name}_{test_name}"
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    subfolder = os.path.join(current_dir, f"../private_data/training_run/{train_name}_{test_name}")
     if not os.path.exists(subfolder):
         os.makedirs(subfolder)
     else:

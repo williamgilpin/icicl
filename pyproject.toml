@@ -27,3 +27,4 @@ dependencies = [
 
 [tool.uv.sources]
 degas = { git = "https://github.com/williamgilpin/degas" }
+dysts = { git = "https://github.com/GilpinLab/dysts" }
