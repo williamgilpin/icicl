@@ -661,18 +661,3 @@ def load_for_training(path: str, device: str | torch.device, lr: float, weight_d
     start_step = ckpt.get("step", 0)
     m.train()
     return m, opt, start_step
-
-def correct_linear_deviation(x, y, strength=0.8):
-    """
-    Correct for linear deviation of y from x.
-    Args:
-        x: The x values to correct, shape (N,).
-        y: The y values to correct, shape (N, M).
-        strength: The strength of the correction.
-    Returns:
-        The corrected y values, shape (N, M).
-    """
-    coef = np.polyfit(x, y, 1)
-    y_approx = coef[0] * x + coef[1]
-    y_corrected = strength * y_approx + (1 - strength) * y
-    return y_corrected

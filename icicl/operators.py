@@ -583,6 +583,11 @@ def transitions_from_time_labels(T, labels, K, tau_time, normalize=True, dtype=f
         P = np.where(row_sums > 0, counts / row_sums, 0.0)
     return P.astype(dtype)
 
+def entropy_stable(p, q, tol=1e-10, **kwargs):
+    p = (p + tol)
+    q = (q + tol)
+    p, q = p / p.sum(), q / q.sum()
+    return entropy(p, q, **kwargs)
 
 # def reduce_markov_chain(P, reduction_map, weights=None):
 #     """
