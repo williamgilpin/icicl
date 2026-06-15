@@ -1,3 +1,24 @@
+"""
+## Scaling-law sweep script
+
+This script trains next-token language models on randomly sampled pairs of continuous 
+dynamical systems from `dysts`. For each train/test pair, it generates trajectories, 
+tokenizes the first state variable with `ChronosTokenizer`, trains models across 
+multiple context lengths, and saves checkpoints, losses, forecast metrics, trajectories,
+ and run metadata.
+
+ By default, ./private_data/scaling_law is used as the root directory for all runs,
+   and 40 train/test pairs are sampled.
+ Each pair is trained with context lengths that are powers of two from 2 to 1024
+
+### Basic usage
+
+```bash
+python scaling_law_sweep.py
+```
+
+"""
+
 import argparse
 import datetime
 import json
@@ -24,7 +45,7 @@ except ModuleNotFoundError:
     )
 
 
-VOCAB_SIZE = 100
+VOCAB_SIZE = 100 // 5
 N_TRAIN = 2 * 40_000
 N_TEST = 3_000
 DEFAULT_CONTEXT_LENGTHS = 2 ** np.arange(1, 11)
@@ -39,6 +60,16 @@ DEFAULT_CADENCE = 1000
 DEFAULT_SEED = 2
 DEFAULT_TORCH_SEED = DEFAULT_SEED
 DEFAULT_PTS_PER_PERIOD = 30
+
+from pathlib import Path
+def check_for_existing_traj_files(traj_name):
+    """
+    Given a trajectory name, check for existing trajectory files in the current 
+    directory.
+    """
+    files = [str(item) for item in list(Path(".").rglob("traj_*.pkl"))]
+    matching_files = [f for f in files if "traj_" + traj_name in f]
+    return matching_files
 
 
 def mse_loss(xtrue, xpred):
@@ -55,7 +86,7 @@ def parse_args():
     parser.add_argument(
         "--base-path",
         type=Path,
-        default=Path("./private_data/scaling_law"),
+        default=Path(f"./private_data/scaling_law_vocab{VOCAB_SIZE}"),
         help="Root directory for all scaling-law runs.",
     )
     parser.add_argument(
@@ -111,7 +142,10 @@ def sample_system_pairs(num_pairs, seed):
     if num_pairs is None:
         num_pairs = len(all_attractors)
     num_pairs = min(num_pairs, len(all_attractors))
-    return list(zip(training_systems[:num_pairs], test_systems[:num_pairs]))
+    pair_list = list(zip(training_systems[:num_pairs], test_systems[:num_pairs]))
+    pre_pairs = [["Lorenz", "Rossler"], ["SanUmSrisuchinwong", "BelousovZhabotinsky"], ["SprottR", "SprottQ"]]
+    pair_list = pre_pairs + pair_list
+    return pair_list
 
 
 def should_skip_pair(train_name, test_name):
@@ -132,19 +166,21 @@ def build_tokenizer(vocab_size):
 def make_pair_datasets(train_name, test_name, args):
     tokenizer = build_tokenizer(args.vocab_size)
 
-    eq_train = getattr(dysts.flows, train_name)()
-    traj_train = eq_train.make_trajectory(
-        args.n_train,
-        standardize=True,
-        resample=True,
-        pts_per_period=args.pts_per_period,
-    )
-    if traj_train is None:
-        raise RuntimeError(f"Failed to generate training trajectory for {train_name}")
-    x_train = traj_train[:, 0]
-    tok_train, _ = tokenizer.encode_series(x_train, 100, 10)
-    tok_train = tok_train[:-1]
-
+    fpaths = check_for_existing_traj_files(train_name)
+    if len(fpaths) > 0:
+        traj_train = np.load(fpaths[0], allow_pickle=True)
+        print(f"Found existing trajectory file for {train_name}: {fpaths[0]}", flush=True)
+    else:
+        eq_train = getattr(dysts.flows, train_name)()
+        traj_train = eq_train.make_trajectory(
+            args.n_train,
+            standardize=True,
+            resample=True,
+            pts_per_period=args.pts_per_period,
+        )
+        if traj_train is None:
+            raise RuntimeError(f"Failed to generate training trajectory for {train_name}")
+    
     eq_train_id = getattr(dysts.flows, train_name)()
     eq_train_id.ic = np.asarray(eq_train_id.ic) + 1.1
     traj_test_id = eq_train_id.make_trajectory(
@@ -155,19 +191,29 @@ def make_pair_datasets(train_name, test_name, args):
     )
     if traj_test_id is None:
         raise RuntimeError(f"Failed to generate ID test trajectory for {train_name}")
+
+    fpaths = check_for_existing_traj_files(test_name)
+    if len(fpaths) > 0:
+        traj_test_ood = np.load(fpaths[0], allow_pickle=True)
+    else:
+        eq_test_ood = getattr(dysts.flows, test_name)()
+        traj_test_ood = eq_test_ood.make_trajectory(
+            args.n_train,
+            standardize=True,
+            resample=True,
+            pts_per_period=args.pts_per_period,
+        )
+        if traj_test_ood is None:
+            raise RuntimeError(f"Failed to generate OOD test trajectory for {test_name}")
+    
+    x_train = traj_train[:, 0]
+    tok_train, _ = tokenizer.encode_series(x_train, 100, 10)
+    tok_train = tok_train[:-1]
+    
     x_test_id = traj_test_id[:, 0]
     tok_test_id, _ = tokenizer.encode_series(x_test_id, 100, 10)
     tok_test_id = tok_test_id[:-1]
-
-    eq_test_ood = getattr(dysts.flows, test_name)()
-    traj_test_ood = eq_test_ood.make_trajectory(
-        args.n_train,
-        standardize=True,
-        resample=True,
-        pts_per_period=args.pts_per_period,
-    )
-    if traj_test_ood is None:
-        raise RuntimeError(f"Failed to generate OOD test trajectory for {test_name}")
+    
     x_test_ood = traj_test_ood[:, 0]
     tok_test_ood, _ = tokenizer.encode_series(x_test_ood, 100, 10)
     tok_test_ood = tok_test_ood[:-1]
