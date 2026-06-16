@@ -182,6 +182,84 @@ def transition_probs_mc(
         return counts
 
 
+@torch.inference_mode()
+def transition_probs_exact_row_expectation(
+    test_tensor,
+    centroid_kgrams,
+    model,
+    batch_size=1024,
+    device="cpu",
+):
+    """
+    Estimate the model-implied transition matrix on delay-token states by exact
+    averaging of next-token probabilities.
+
+    Args:
+        test_tensor (torch.LongTensor): Context windows of shape (N, C).
+        centroid_kgrams (np.ndarray or torch.Tensor): Representative delay states,
+            shape (K, order), where each row is a token k-gram.
+        model: Autoregressive model returning logits of shape (B, C, V).
+        batch_size (int, optional): Number of contexts per model forward pass.
+        device (str or torch.device, optional): Device for model evaluation.
+
+    Returns:
+        torch.Tensor: Row-stochastic transition matrix of shape (K, K).
+
+    Example usage:
+
+        P_reduced = transition_probs_exact_row_expectation(
+            test_tensor=test_tensor_context, # [B, T] long
+            centroid_kgrams=centroid_kgrams, # [K, k] long
+            model=model,
+            batch_size=1024,
+            device="cpu",
+        )
+    """
+    model.eval()
+    model.to(device)
+
+    centroid_kgrams = torch.as_tensor(centroid_kgrams, dtype=torch.long)
+    test_tensor = torch.as_tensor(test_tensor, dtype=torch.long)
+
+    block_size = getattr(model, "block_size", test_tensor.shape[1])
+    if test_tensor.shape[1] > block_size:
+        test_tensor = test_tensor[:, -block_size:]
+
+    K, order = centroid_kgrams.shape
+    suffixes = test_tensor[:, -order:]
+
+    with torch.inference_mode():
+        dummy_logits = model(test_tensor[:1, -block_size:].to(device))[:, -1, :]
+    model_vocab_size = dummy_logits.shape[-1]
+
+    dists = torch.cdist(suffixes.float(), centroid_kgrams.float(), p=2)
+    row_ids = dists.argmin(dim=1)
+
+    successors = torch.empty((K, model_vocab_size), dtype=torch.long)
+    for i in range(K):
+        shifted = torch.empty((model_vocab_size, order), dtype=torch.long)
+        shifted[:, :-1] = centroid_kgrams[i, 1:].unsqueeze(0)
+        shifted[:, -1] = torch.arange(model_vocab_size)
+
+        successor_dists = torch.cdist(shifted.float(), centroid_kgrams.float(), p=2)
+        successors[i] = successor_dists.argmin(dim=1)
+
+    P = torch.zeros((K, K), dtype=torch.float32)
+
+    for start in range(0, len(test_tensor), batch_size):
+        ctx = test_tensor[start:start + batch_size, -block_size:].to(device)
+        rows = row_ids[start:start + batch_size]
+
+        logits = model(ctx)[:, -1, :]
+        probs = torch.softmax(logits, dim=-1).cpu()
+
+        for b, i in enumerate(rows.tolist()):
+            cols = successors[i]
+            P[i].index_add_(0, cols, probs[b])
+
+    row_sum = P.sum(dim=-1, keepdim=True).clamp_min(1e-30)
+    return P / row_sum
+
 
 @torch.no_grad()
 def transition_probs_mc_greedy_one_step(

@@ -1,25 +1,25 @@
 """
 ## Scaling-law sweep script
 
-This script trains next-token language models on randomly sampled pairs of continuous 
-dynamical systems from `dysts`. For each train/test pair, it generates trajectories, 
-tokenizes the first state variable with `ChronosTokenizer`, trains models across 
-multiple context lengths, and saves checkpoints, losses, forecast metrics, trajectories,
- and run metadata.
+This script trains next-token language models on randomly sampled pairs of continuous
+dynamical systems from `dysts`. For each train/test pair, it generates trajectories,
+tokenizes the first state variable with `ChronosTokenizer`, trains models across
+multiple amounts of pretraining data at fixed context length 128, and saves
+checkpoints, losses, forecast metrics, trajectories, and run metadata.
 
- By default, ./private_data/scaling_law is used as the root directory for all runs,
-   and 40 train/test pairs are sampled.
- Each pair is trained with context lengths that are powers of two from 2 to 1024
+By default, ./private_data/scaling_law_data_vocab{vocab_size} is used as the root
+directory for all runs, and all available train/test pairs are sampled. Each pair is
+trained with logarithmically spaced training-token counts up to `--n-train`.
 
 ### Basic usage
 
 ```bash
-python scaling_law_sweep.py
+python scaling_law_data_sweep.py
 ```
 
-Run with custom seed and context lengths
+Run with custom seed and training-token counts
 ```
-python scaling_law_sweep.py --seed 42 --context-lengths 16 64 256 --vocab-size 20
+python scaling_law_data_sweep.py --seed 42 --train-sizes 256 1024 4096 80000 --vocab-size 20
 ```
 
 """
@@ -50,10 +50,11 @@ except ModuleNotFoundError:
     )
 
 
-VOCAB_SIZE = 100 // 5
+VOCAB_SIZE = 100
 N_TRAIN = 2 * 40_000
 N_TEST = 3_000
-DEFAULT_CONTEXT_LENGTHS = 2 ** np.arange(1, 11)
+DEFAULT_CONTEXT_LENGTH = 128
+DEFAULT_NUM_TRAIN_SIZES = 10
 DEFAULT_STEPS = 60_000
 DEFAULT_HORIZON = 60
 DEFAULT_BATCH_SIZE = 64 * 2
@@ -104,7 +105,7 @@ def parse_args():
     parser.add_argument(
         "--base-path",
         type=Path,
-        default=Path(f"./private_data/scaling_law_vocab{args.vocab_size}"),
+        default=None,
         help="Root directory for all scaling-law runs.",
     )
     parser.add_argument(
@@ -126,11 +127,23 @@ def parse_args():
         help="Torch RNG seed used before each model training run.",
     )
     parser.add_argument(
-        "--context-lengths",
+        "--context-length",
+        type=int,
+        default=DEFAULT_CONTEXT_LENGTH,
+        help="Fixed context length used for every training-data sweep point.",
+    )
+    parser.add_argument(
+        "--train-sizes",
         type=int,
         nargs="+",
         default=None,
-        help="Explicit list of context lengths. Defaults to powers of two from 2 to 1024.",
+        help="Explicit list of training-token counts. Defaults to a logarithmic ramp up to --n-train.",
+    )
+    parser.add_argument(
+        "--num-train-sizes",
+        type=int,
+        default=DEFAULT_NUM_TRAIN_SIZES,
+        help="Number of logarithmically spaced training-token counts when --train-sizes is omitted.",
     )
     parser.add_argument("--vocab-size", type=int, default=VOCAB_SIZE)
     parser.add_argument("--n-train", type=int, default=N_TRAIN)
@@ -147,9 +160,12 @@ def parse_args():
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Retrain contexts even if a final checkpoint already exists.",
+        help="Retrain data-size sweep points even if a final checkpoint already exists.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.base_path is None:
+        args.base_path = Path(f"./private_data/scaling_law_data_vocab{args.vocab_size}")
+    return args
 
 
 def sample_system_pairs(num_pairs, seed):
@@ -247,7 +263,28 @@ def make_pair_datasets(train_name, test_name, args):
     }
 
 
-def save_pair_metadata(pair_dir, train_name, test_name, args, context_lengths):
+def get_train_sizes(args, max_train_size):
+    min_train_size = args.context_length + 2
+    if max_train_size < min_train_size:
+        return np.asarray([], dtype=int)
+
+    if args.train_sizes is not None:
+        train_sizes = np.asarray(args.train_sizes, dtype=int)
+    else:
+        train_sizes = np.geomspace(
+            min_train_size,
+            max_train_size,
+            num=args.num_train_sizes,
+        )
+        train_sizes = np.rint(train_sizes).astype(int)
+
+    train_sizes = np.unique(np.clip(train_sizes, min_train_size, max_train_size))
+    if len(train_sizes) == 0 or train_sizes[-1] != max_train_size:
+        train_sizes = np.unique(np.append(train_sizes, max_train_size))
+    return train_sizes
+
+
+def save_pair_metadata(pair_dir, train_name, test_name, args, train_sizes):
     metadata = {
         "train_name": train_name,
         "test_name": test_name,
@@ -265,7 +302,8 @@ def save_pair_metadata(pair_dir, train_name, test_name, args, context_lengths):
         "pts_per_period": args.pts_per_period,
         "seed": args.seed,
         "torch_seed": args.torch_seed,
-        "context_lengths": [int(x) for x in context_lengths],
+        "context_length": int(args.context_length),
+        "train_sizes": [int(x) for x in train_sizes],
     }
     with open(pair_dir / "run_config.json", "w", encoding="ascii") as f:
         json.dump(metadata, f, indent=2)
@@ -321,10 +359,11 @@ def forecast_metrics(model, tok_test_id, tok_test_ood, context_length, horizon):
     }
 
 
-def train_context(context_dir, context_length, datasets, args):
-    final_ckpt = context_dir / f"tiny_lm_context{context_length}.pt"
-    losses_path = context_dir / f"losses_context{context_length}.npz"
-    metrics_path = context_dir / f"forecast_metrics_context{context_length}.json"
+def train_data_size(train_dir, train_size, datasets, args):
+    context_length = args.context_length
+    final_ckpt = train_dir / f"tiny_lm_context{context_length}_ntrain{train_size}.pt"
+    losses_path = train_dir / f"losses_context{context_length}_ntrain{train_size}.npz"
+    metrics_path = train_dir / f"forecast_metrics_context{context_length}_ntrain{train_size}.json"
     min_token_count = min(
         len(datasets["tok_train"]),
         len(datasets["tok_test_id"]),
@@ -332,20 +371,26 @@ def train_context(context_dir, context_length, datasets, args):
     )
 
     if final_ckpt.exists() and not args.overwrite:
-        print(f"Skipping context {context_length}; found {final_ckpt}", flush=True)
+        print(f"Skipping n_train {train_size}; found {final_ckpt}", flush=True)
         return
     if context_length >= min_token_count:
         print(
-            f"Skipping context {context_length}; shortest token stream has length {min_token_count}",
+            f"Skipping n_train {train_size}; shortest token stream has length {min_token_count}",
+            flush=True,
+        )
+        return
+    if train_size > len(datasets["tok_train"]):
+        print(
+            f"Skipping n_train {train_size}; training token stream has length {len(datasets['tok_train'])}",
             flush=True,
         )
         return
 
-    context_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Training context length {context_length}", flush=True)
+    train_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Training with n_train {train_size} at context length {context_length}", flush=True)
 
     torch.manual_seed(args.torch_seed)
-    tokens_train = torch.tensor(datasets["tok_train"], dtype=torch.long)
+    tokens_train = torch.tensor(datasets["tok_train"][:train_size], dtype=torch.long)
     tokens_val = torch.tensor(datasets["tok_test_id"], dtype=torch.long)
     tokens_test_out = torch.tensor(datasets["tok_test_ood"], dtype=torch.long)
 
@@ -361,7 +406,7 @@ def train_context(context_dir, context_length, datasets, args):
         d_model=args.d_model,
         d_k=args.d_k,
         weight_decay=args.weight_decay,
-        save_path=str(context_dir) + "/",
+        save_path=str(train_dir) + "/",
         cadence=args.cadence,
     )
 
@@ -380,25 +425,21 @@ def train_context(context_dir, context_length, datasets, args):
             json.dump(metrics, f, indent=2)
 
 
-def train_pair(train_name, test_name, context_lengths, args):
+def train_pair(train_name, test_name, args):
     pair_dir = make_unique_pair_dir(args.base_path, train_name, test_name)
 
-    save_pair_metadata(pair_dir, train_name, test_name, args, context_lengths)
     datasets = make_pair_datasets(train_name, test_name, args)
+    train_sizes = get_train_sizes(args, len(datasets["tok_train"]))
+    save_pair_metadata(pair_dir, train_name, test_name, args, train_sizes)
     save_pair_trajectories(pair_dir, train_name, test_name, datasets)
 
-    for context_length in context_lengths:
-        context_dir = pair_dir / f"context{context_length}"
-        train_context(context_dir, int(context_length), datasets, args)
+    for train_size in train_sizes:
+        train_dir = pair_dir / f"ntrain{int(train_size)}"
+        train_data_size(train_dir, int(train_size), datasets, args)
 
 
 def main():
     args = parse_args()
-    context_lengths = (
-        np.asarray(args.context_lengths, dtype=int)
-        if args.context_lengths is not None
-        else np.asarray(DEFAULT_CONTEXT_LENGTHS, dtype=int)
-    )
     args.base_path.mkdir(parents=True, exist_ok=True)
 
     for train_name, test_name in sample_system_pairs(args.num_pairs, args.seed):
@@ -407,9 +448,13 @@ def main():
             print(skip_reason, flush=True)
             continue
 
-        print(f"Running scaling-law sweep for {train_name} -> {test_name}", flush=True)
+        print(
+            f"Running pretraining-data sweep for {train_name} -> {test_name} "
+            f"at context length {args.context_length}",
+            flush=True,
+        )
         try:
-            train_pair(train_name, test_name, context_lengths, args)
+            train_pair(train_name, test_name, args)
         except Exception as exc:
             print(
                 f"Failed {train_name} -> {test_name}: {type(exc).__name__}: {exc}",

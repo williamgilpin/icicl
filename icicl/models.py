@@ -1,9 +1,14 @@
 import numpy as np
 from dataclasses import dataclass
 from typing import Tuple, Optional, Dict
+import math
 
 import math, pickle, torch
 import torch.nn as nn
+import torch
+import torch.nn.functional as F
+from torch import nn
+
 from torch.utils.data import Dataset, DataLoader
 
 PAD_ID = 0  # reserved
@@ -116,10 +121,6 @@ class ChronosTokenizer:
         with np.errstate(invalid="ignore"):
             return tilde * scale_s
 
-
-import torch
-import torch.nn.functional as F
-
 @torch.no_grad()
 def generate_autoregressive(
     model,
@@ -186,9 +187,6 @@ def generate_autoregressive(
         x = torch.cat([x, next_id.unsqueeze(-1)], dim=-1)  # append
 
     return x  # shape: (B, T + H)
-
-from torch import nn
-import math
 
 class RelativePositionBias(nn.Module):
     """
