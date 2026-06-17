@@ -17,6 +17,11 @@ multiple context lengths, and saves checkpoints, losses, forecast metrics, traje
 python scaling_law_sweep.py
 ```
 
+Run with custom seed and context lengths
+```
+python scaling_law_sweep.py --seed 42 --context-lengths 16 64 256 --vocab-size 20
+```
+
 """
 
 import argparse
@@ -62,13 +67,26 @@ DEFAULT_TORCH_SEED = DEFAULT_SEED
 DEFAULT_PTS_PER_PERIOD = 30
 
 from pathlib import Path
-def check_for_existing_traj_files(traj_name):
+def check_for_existing_traj_files(traj_name, min_len=None):
     """
     Given a trajectory name, check for existing trajectory files in the current 
     directory.
     """
     files = [str(item) for item in list(Path(".").rglob("traj_*.pkl"))]
-    matching_files = [f for f in files if "traj_" + traj_name in f]
+    matching_files = [f for f in files if f"traj_{traj_name}.pkl" in f]
+    if min_len is not None:
+        valid_files = []
+        for f in matching_files:
+            try:
+                traj = np.load(f, allow_pickle=True)
+                if len(traj) >= min_len:
+                    valid_files.append(f)
+            except Exception as exc:
+                print(
+                    f"Short or invalid trajectory file {f}: {type(exc).__name__}: {exc}", 
+                    flush=True
+                )
+        matching_files = valid_files
     return matching_files
 
 
@@ -86,7 +104,7 @@ def parse_args():
     parser.add_argument(
         "--base-path",
         type=Path,
-        default=Path(f"./private_data/scaling_law_vocab{VOCAB_SIZE}"),
+        default=Path(f"./private_data/scaling_law_vocab{100}"),
         help="Root directory for all scaling-law runs.",
     )
     parser.add_argument(
@@ -166,7 +184,7 @@ def build_tokenizer(vocab_size):
 def make_pair_datasets(train_name, test_name, args):
     tokenizer = build_tokenizer(args.vocab_size)
 
-    fpaths = check_for_existing_traj_files(train_name)
+    fpaths = check_for_existing_traj_files(train_name, min_len=args.n_train)
     if len(fpaths) > 0:
         traj_train = np.load(fpaths[0], allow_pickle=True)
         print(f"Found existing trajectory file for {train_name}: {fpaths[0]}", flush=True)
@@ -195,6 +213,7 @@ def make_pair_datasets(train_name, test_name, args):
     fpaths = check_for_existing_traj_files(test_name)
     if len(fpaths) > 0:
         traj_test_ood = np.load(fpaths[0], allow_pickle=True)
+        print(f"Found existing trajectory file for {test_name}: {fpaths[0]}", flush=True)
     else:
         eq_test_ood = getattr(dysts.flows, test_name)()
         traj_test_ood = eq_test_ood.make_trajectory(
