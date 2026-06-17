@@ -293,7 +293,7 @@ def make_block_size(step, warm=2_000, max_bs=1024, min_bs=256):
     frac = min(1.0, (step - warm) / (warm))
     return int(min_bs + frac * (max_bs - min_bs))
 
-# 1) RoPE with context extension (positional interpolation / scaled time index)
+# RoPE with context extension (positional interpolation / scaled time index)
 def apply_rope(q, k, base_theta=10000.0, scale=10.0):
     """
     Rotary position embedding (RoPE) with optional time scaling.
@@ -385,19 +385,108 @@ class SingleHeadCausalAttention(nn.Module):
         x = x + self.ffn(self.ln2(x))
         return x
 
+class AttentionOnlyCausalBlock(nn.Module):
+    """
+    Single-head causal attention block with no MLP/FFN.
+
+    This is an ablation of the original block: it preserves layer norm,
+    residual attention, value projection, and positional-bias options, but
+    removes the feedforward sublayer entirely.
+
+    Args:
+        d_model (int): Residual stream dimension.
+        d_k (int, optional): Query/key dimension.
+        pos_mode (str, optional): Position mechanism: {"rpb", "rope", "alibi", "nope"}.
+        rpb_num_buckets (int, optional): Number of relative-position buckets.
+        rpb_max_distance (int, optional): Maximum relative-position distance.
+        alibi_slope (float, optional): ALiBi slope.
+
+    Attributes:
+        ln1 (nn.LayerNorm): Pre-attention layer norm.
+        q (nn.Linear): Query projection.
+        k (nn.Linear): Key projection.
+        v_proj (nn.Linear): Value projection.
+        latest_attn (torch.Tensor or None): Most recently collected attention map.
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        d_k: int = 128,
+        pos_mode: str = "alibi",
+        rpb_num_buckets: int = 32,
+        rpb_max_distance: int = 128,
+        alibi_slope: float = 1.0,
+    ):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(d_model)
+        self.q = nn.Linear(d_model, d_k, bias=False)
+        self.k = nn.Linear(d_model, d_k, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False)
+        self.scale = d_k ** -0.5
+        self.latest_attn = None
+
+        self.pos_mode = pos_mode
+        if pos_mode == "rpb":
+            self.rel_pos_bias = RelativePositionBias(
+                num_buckets=rpb_num_buckets,
+                max_distance=rpb_max_distance,
+                n_heads=1,
+            )
+        elif pos_mode == "alibi":
+            self.alibi_slope = alibi_slope
+
+    def forward(self, x, collect_attn: bool = False):
+        B, T, _ = x.size()
+
+        h = self.ln1(x)
+        q = self.q(h)
+        k = self.k(h)
+        v = self.v_proj(h)
+
+        if self.pos_mode == "rope":
+            q, k = apply_rope(q, k)
+
+        att = (q @ k.transpose(-2, -1)) * self.scale
+
+        if self.pos_mode == "rpb":
+            att = att + self.rel_pos_bias(T, device=x.device)
+        elif self.pos_mode == "alibi":
+            att = att + alibi_bias(T, x.device, slope=self.alibi_slope)
+
+        mask = torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool))
+        att = att.masked_fill(~mask, float("-inf")).softmax(-1)
+
+        if collect_attn:
+            self.latest_attn = att.detach()
+
+        return x + att @ v
+
+########################
+########################    Main LLM code
+########################
+
 class TinyCausalLM(nn.Module):
     """
     Two-layer, single-head causal LM.
-    pos_mode:
-        "rpb"   -> T5-style relative position BIAS inside attention (Chronos-like)
-        "rope"  -> RoPE (rotary) applied to q,k; no abs pe added
-        "alibi" -> ALiBi additive bias; no abs pe added. Best currently
-        "nope"  -> no positions at all (not recommended unless testing)
-        "abs"   -> optional learned GPT-2-style absolute embeddings added to x
-        "onehot" -> one-hot absolute positions (concat then project)
+
+    Args:
+        vocab_size (int): Size of the vocabulary.
+        d_model (int): Dimension of the model.
+        d_k (int): Dimension of the query/key vectors.
+        block_size (int): Maximum context length.
+        pos_mode:
+            "rpb"   -> T5-style relative position BIAS inside attention (Chronos-like)
+            "rope"  -> RoPE (rotary) applied to q,k; no abs pe added
+            "alibi" -> ALiBi additive bias; no abs pe added. Best currently
+            "nope"  -> no positions at all (not recommended unless testing)
+            "abs"   -> optional learned GPT-2-style absolute embeddings added to x
+            "onehot" -> one-hot absolute positions (concat then project)
+        ablate_ffn (bool): If True, removes the feedforward sublayer for an 
+            attention-only block.
     """
     def __init__(self, vocab_size: int, d_model: int = 256, d_k: int = 128, block_size: int = 512,
-                 pos_mode: str = "alibi"):
+                 pos_mode: str = "alibi", ablate_ffn: bool = False):
         super().__init__()
         self.block_size = block_size
         self.tok_emb = nn.Embedding(vocab_size, d_model)
@@ -406,9 +495,21 @@ class TinyCausalLM(nn.Module):
         if self.use_abs:
             self.pos_emb = nn.Embedding(block_size, d_model)
 
-        # pass pos_mode through to both blocks
-        self.attn1 = SingleHeadCausalAttention(d_model, d_k, pos_mode=pos_mode)
-        self.attn2 = SingleHeadCausalAttention(d_model, d_k, pos_mode=pos_mode)
+        if ablate_ffn:
+            print("Using attention-only blocks (no FFN)", flush=True)
+            self.attn1 = AttentionOnlyCausalBlock(
+                d_model=d_model,
+                d_k=d_k,
+                pos_mode=pos_mode,
+            )
+            self.attn2 = AttentionOnlyCausalBlock(
+                d_model=d_model,
+                d_k=d_k,
+                pos_mode=pos_mode,
+            )
+        else:
+            self.attn1 = SingleHeadCausalAttention(d_model, d_k, pos_mode=pos_mode)
+            self.attn2 = SingleHeadCausalAttention(d_model, d_k, pos_mode=pos_mode)
         self.ln_f = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
         self.lm_head.weight = self.tok_emb.weight  # tie
@@ -441,51 +542,6 @@ class TinyCausalLM(nn.Module):
             return logits, [self.attn1.latest_attn, self.attn2.latest_attn]
         return logits
 
-    # def forward_float(self, x_float: torch.Tensor, collect_attn: bool = False):
-    #     """
-    #     Args:
-    #         x_float (torch.Tensor): Shape (B, T) float-valued inputs where integer
-    #             values correspond to token positions along the real line (e.g., 1 -> 1.0).
-    #         collect_attn (bool, optional): If True, also returns per-layer attention
-    #             matrices (detached). Defaults to False.
-
-    #     Returns:
-    #         torch.Tensor or Tuple[torch.Tensor, List[torch.Tensor]]:
-    #             If collect_attn=False: logits of shape (B, T, vocab_size).
-    #             If collect_attn=True: (logits, [attn1, attn2]) where each attn is (T, T).
-    #     """
-    #     assert x_float.dim() == 2, "x_float must be (B, T)"
-    #     assert x_float.dtype.is_floating_point, "forward_float expects float inputs"
-    #     B, T = x_float.shape
-    #     assert T <= self.block_size
-
-    #     # --- Differentiable interpolation between adjacent token embeddings ---
-    #     # clamp so that i1 stays in-range
-    #     V = self.tok_emb.num_embeddings
-    #     x_clamped = x_float.clamp(min=0.0, max=float(V - 1))
-    #     i0 = torch.floor(x_clamped).long()                         # (B, T)
-    #     i1 = torch.clamp(i0 + 1, max=V - 1)                        # (B, T)
-    #     w = (x_clamped - i0.to(x_clamped.dtype)).unsqueeze(-1)     # (B, T, 1)
-
-    #     E0 = self.tok_emb(i0)                                      # (B, T, D)
-    #     E1 = self.tok_emb(i1)                                      # (B, T, D)
-    #     x = E0 + w * (E1 - E0)                                     # (B, T, D)
-    #     # --------------------------------------------------------------------
-
-    #     # absolute positions only if pos_mode=="abs" (kept identical to .forward)
-    #     if self.use_abs:
-    #         pos = torch.arange(T, device=x.device)
-    #         x = x + self.pos_emb(pos)[None, :, :]
-
-    #     x = self.attn1(x, collect_attn=collect_attn)
-    #     x = self.attn2(x, collect_attn=collect_attn)
-    #     x = self.ln_f(x)
-    #     logits = self.lm_head(x)
-
-    #     if collect_attn:
-    #         return logits, [self.attn1.latest_attn, self.attn2.latest_attn]
-    #     return logits
-
 
 
 def train_next_token(
@@ -504,6 +560,7 @@ def train_next_token(
     device: str | torch.device | None = None,
     save_path: str = None,
     cadence: int = 1000,
+    ablate_ffn: bool = False,
 ):
     """
     Train a tiny causal language model to predict the next token in a sequence.
@@ -523,6 +580,7 @@ def train_next_token(
         device: The device to train the model on.
         save_path: The path to save the checkpoint.
         cadence: If saving, the number of steps between checkpoints.
+        ablate_ffn: If True, uses attention-only blocks with no feedforward sublayer.
 
     Returns:
         A TinyCausalLM model.
@@ -536,7 +594,7 @@ def train_next_token(
     dl_val_ood = DataLoader(StreamWindows(tokens_test_out, block_size), batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True)
     it = iter(dl_train)
 
-    model = TinyCausalLM(vocab_size, d_model=d_model, d_k=d_k, block_size=block_size).to(device)
+    model = TinyCausalLM(vocab_size, d_model=d_model, d_k=d_k, block_size=block_size, ablate_ffn=ablate_ffn).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = nn.CrossEntropyLoss()
 

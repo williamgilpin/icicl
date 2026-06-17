@@ -104,7 +104,7 @@ def parse_args():
     parser.add_argument(
         "--base-path",
         type=Path,
-        default=Path(f"./private_data/scaling_law_vocab{args.vocab_size}"),
+        default=Path(f"./private_data/scaling_law_vocab{100}"),
         help="Root directory for all scaling-law runs.",
     )
     parser.add_argument(

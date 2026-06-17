@@ -297,6 +297,7 @@ def transition_probs_mc_greedy_one_step(
     ## Check input sizes
     B, T = test_tensor.shape
     K, k = kmers_unique.shape
+    print("Running: ", k, T, flush=True)
     assert k > 1 and T >= k
 
     next_tokens = model(test_tensor[:, -k:])[:, -1, :]

@@ -177,8 +177,8 @@ def sample_system_pairs(num_pairs, seed):
         num_pairs = len(all_attractors)
     num_pairs = min(num_pairs, len(all_attractors))
     pair_list = list(zip(training_systems[:num_pairs], test_systems[:num_pairs]))
-    pre_pairs = [["Lorenz", "Rossler"], ["SanUmSrisuchinwong", "BelousovZhabotinsky"], ["SprottR", "SprottQ"]]
-    pair_list = pre_pairs + pair_list
+    # pre_pairs = [["Lorenz", "Rossler"], ["SanUmSrisuchinwong", "BelousovZhabotinsky"], ["SprottR", "SprottQ"]]
+    # pair_list = pre_pairs + pair_list
     return pair_list
 
 
