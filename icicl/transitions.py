@@ -10,6 +10,67 @@ over grouped contexts, and faster variants with chunking and optimized indexing.
 
 import torch
 import torch.nn.functional as F
+import numpy as np
+
+from scipy.stats import entropy
+def infer_num_tokens(*token_arrays):
+    """
+    Infer the number of token ids actually present.
+
+    Args:
+        *token_arrays: One or more integer token arrays.
+
+    Returns:
+        int: max_token + 1.
+    """
+    max_token = max(int(np.max(t)) for t in token_arrays if len(t) > 0)
+    return max_token + 1
+
+def weighted_row_kl(weights, p_cond, q_cond):
+    """
+    Compute sum_i weights[i] * KL(q_cond[i] || p_cond[i]).
+
+    Args:
+        weights (ndarray): Nonnegative weights summing to 1.
+        p_cond (ndarray): Reference conditional probabilities.
+        q_cond (ndarray): Target conditional probabilities.
+
+    Returns:
+        float: Weighted conditional KL divergence.
+    """
+    row_kls = np.array([entropy(q_cond[i], p_cond[i]) for i in range(len(weights))])
+    return np.sum(weights * row_kls)
+
+def bigram_conditional(tokens, num_tokens=None, alpha=1e-6):
+    """
+    Estimate a smoothed bigram conditional distribution P(x_t | x_{t-1}).
+
+    Args:
+        tokens (ndarray): Integer token ids.
+        num_tokens (int, optional): Number of token ids.
+        alpha (float): Additive smoothing constant.
+
+    Returns:
+        tuple[ndarray, ndarray]:
+            prev_probs: Marginal over previous token.
+            cond: Conditional matrix.
+    """
+    tokens = np.asarray(tokens, dtype=int)
+    if num_tokens is None:
+        num_tokens = int(tokens.max()) + 1
+
+    prev = tokens[:-1]
+    nxt = tokens[1:]
+
+    joint = np.zeros((num_tokens, num_tokens), dtype=float)
+    np.add.at(joint, (prev, nxt), 1.0)
+
+    joint += alpha
+    prev_counts = joint.sum(axis=1)
+    cond = joint / prev_counts[:, None]
+    prev_probs = prev_counts / prev_counts.sum()
+    return prev_probs, cond
+
 
 @torch.no_grad()
 def transition_probs_mc(
@@ -344,7 +405,120 @@ def transition_probs_mc_greedy_one_step(
     else:
         return counts
 
+@torch.inference_mode()
+def transition_probs_mc_greedy_one_step_sampled(
+    test_tensor: torch.Tensor,
+    kmers_unique: torch.Tensor,
+    model,
+    n_input_samples: int = 4096,
+    batch_size: int = 512,
+    lookup_chunk_size: int = 2048,
+    full_context: bool = True,
+    use_compile: bool = False,
+    fix_dangling: bool = False,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """
+    Estimate a greedy one-step transition matrix on k-mer states using sampled contexts.
 
+    Args:
+        test_tensor (torch.Tensor): Context windows of shape (B, T).
+        kmers_unique (torch.Tensor): Candidate k-mers of shape (K, k).
+        model: Autoregressive model returning logits of shape (B, T, V).
+        n_input_samples (int, optional): Number of context rows to sample.
+        batch_size (int, optional): Forward-pass batch size.
+        lookup_chunk_size (int, optional): Chunk size for nearest-kmer lookup.
+        full_context (bool, optional): If True, evaluate model on full allowed context.
+        use_compile (bool, optional): Whether to compile the model.
+        fix_dangling (bool, optional): Whether to replace zero-count rows with uniform rows.
+        normalize (bool, optional): Whether to row-normalize the count matrix.
+
+    Returns:
+        torch.Tensor: Transition matrix of shape (K, K).
+
+    Example usage:
+        P_reduced = transition_probs_mc_greedy_one_step_sampled(
+            test_tensor=test_tensor_context,
+            kmers_unique=torch.tensor(centroid_kgrams),
+            model=model,
+            n_input_samples=1000,
+            batch_size=128,
+            lookup_chunk_size=512,
+            full_context=True,
+            fix_dangling=False,
+        )
+    """
+    device = next(model.parameters()).device
+    model.eval()
+
+    if use_compile and hasattr(torch, "compile"):
+        model = torch.compile(model)
+
+    B, T = test_tensor.shape
+    K, k = kmers_unique.shape
+    assert k > 1 and T >= k
+
+    n = min(n_input_samples, B)
+    sample_idx = torch.randperm(B, device=test_tensor.device)[:n]
+
+    test_sample = test_tensor[sample_idx].to(device, non_blocking=True)
+    kmers_unique = kmers_unique.to(device, non_blocking=True)
+
+    block_size = getattr(model, "block_size", T)
+    prefixes = test_sample[:, -k:]
+
+    if full_context:
+        model_inputs = test_sample[:, -block_size:]
+    else:
+        model_inputs = prefixes
+
+    next_tokens = []
+    for start in range(0, n, batch_size):
+        x = model_inputs[start:start + batch_size]
+        logits = model(x)[:, -1, :]
+        next_tokens.append(logits.argmax(dim=-1))
+    next_tokens = torch.cat(next_tokens, dim=0)
+
+    suffixes = torch.cat([prefixes[:, 1:], next_tokens[:, None]], dim=1)
+
+    def nearest_kmer_index(kmer_block: torch.Tensor) -> torch.Tensor:
+        """
+        Map each k-mer to the closest row in kmers_unique.
+
+        Args:
+            kmer_block (torch.Tensor): K-mers of shape (N, k).
+
+        Returns:
+            torch.Tensor: Indices into kmers_unique, shape (N,).
+        """
+        out = []
+        kmers_f = kmers_unique.float()
+        for start in range(0, len(kmer_block), lookup_chunk_size):
+            block = kmer_block[start:start + lookup_chunk_size].float()
+            d = torch.cdist(block, kmers_f)
+            out.append(d.argmin(dim=1))
+            del d
+        return torch.cat(out, dim=0)
+
+    i_idx = nearest_kmer_index(prefixes)
+    j_idx = nearest_kmer_index(suffixes)
+
+    flat_idx = i_idx * K + j_idx
+    counts = torch.bincount(flat_idx, minlength=K * K).reshape(K, K).float()
+
+    if not normalize:
+        return counts
+
+    row_sum = counts.sum(dim=-1, keepdim=True)
+
+    if fix_dangling:
+        dangling = row_sum.squeeze(-1) == 0
+        probs = torch.zeros_like(counts)
+        probs[~dangling] = counts[~dangling] / row_sum[~dangling]
+        probs[dangling] = 1.0 / K
+        return probs
+
+    return counts / row_sum.clamp_min(1e-30)
 
 @torch.no_grad()
 def transition_probs2(
