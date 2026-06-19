@@ -5,6 +5,8 @@
 !data/*
 !icicl/
 !icicl/*
+!icicl/scripts/
+!icicl/scripts/*
 
 # Documentation and configuration files
 !*.md
