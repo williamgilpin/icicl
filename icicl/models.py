@@ -332,11 +332,17 @@ def alibi_bias(T, device, slope=0.0):
 
 
 class SingleHeadCausalAttention(nn.Module):
+    """
+    Single-head causal attention block with optional feedforward sublayer.
+    
+    pos_mode: "rpb" (relative position bias), "rope" (rotary), 
+        "alibi" (additive linear bias), or "nope" (no positional bias).
+    """
     def __init__(self, d_model: int, d_k: int = 128, ffn_mult: int = 2,
-                 pos_mode: str = "alibi",      # {"rpb","rope","alibi","nope"}
+                 pos_mode: str = "alibi",      
                  rpb_num_buckets: int = 32, 
                  rpb_max_distance: int = 128,
-                 alibi_slope: float = 1.0): # change this
+                 alibi_slope: float = 1.0):
         super().__init__()
         self.ln1 = nn.LayerNorm(d_model)
         self.q = nn.Linear(d_model, d_k, bias=False)
@@ -482,11 +488,12 @@ class TinyCausalLM(nn.Module):
             "nope"  -> no positions at all (not recommended unless testing)
             "abs"   -> optional learned GPT-2-style absolute embeddings added to x
             "onehot" -> one-hot absolute positions (concat then project)
+        alibi_slope (float): Slope for ALiBi bias; ignored if pos_mode != "alibi".
         ablate_ffn (bool): If True, removes the feedforward sublayer for an 
             attention-only block.
     """
     def __init__(self, vocab_size: int, d_model: int = 256, d_k: int = 128, block_size: int = 512,
-                 pos_mode: str = "alibi", ablate_ffn: bool = False):
+                 pos_mode: str = "alibi", alibi_slope: float = 1.0, ablate_ffn: bool = False):
         super().__init__()
         self.block_size = block_size
         self.tok_emb = nn.Embedding(vocab_size, d_model)
@@ -508,8 +515,12 @@ class TinyCausalLM(nn.Module):
                 pos_mode=pos_mode,
             )
         else:
-            self.attn1 = SingleHeadCausalAttention(d_model, d_k, pos_mode=pos_mode)
-            self.attn2 = SingleHeadCausalAttention(d_model, d_k, pos_mode=pos_mode)
+            self.attn1 = SingleHeadCausalAttention(
+                d_model, d_k, pos_mode=pos_mode, alibi_slope=alibi_slope
+            )
+            self.attn2 = SingleHeadCausalAttention(
+                d_model, d_k, pos_mode=pos_mode, alibi_slope=alibi_slope
+            )
         self.ln_f = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
         self.lm_head.weight = self.tok_emb.weight  # tie
@@ -557,6 +568,7 @@ def train_next_token(
     lr: float = 5e-5,
     weight_decay: float = 0.0,
     grad_accum: int = 1,
+    alibi_slope: float = 1.0,
     device: str | torch.device | None = None,
     save_path: str = None,
     cadence: int = 1000,
@@ -577,6 +589,7 @@ def train_next_token(
         weight_decay: The weight decay for the optimizer.
         grad_accum: The number of micro-batches to accumulate gradients over when 
             training on a single GPU.
+        alibi_slope: The slope for the ALiBi positional bias.
         device: The device to train the model on.
         save_path: The path to save the checkpoint.
         cadence: If saving, the number of steps between checkpoints.
@@ -594,7 +607,7 @@ def train_next_token(
     dl_val_ood = DataLoader(StreamWindows(tokens_test_out, block_size), batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True)
     it = iter(dl_train)
 
-    model = TinyCausalLM(vocab_size, d_model=d_model, d_k=d_k, block_size=block_size, ablate_ffn=ablate_ffn).to(device)
+    model = TinyCausalLM(vocab_size, d_model=d_model, d_k=d_k, block_size=block_size, ablate_ffn=ablate_ffn, alibi_slope=alibi_slope).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = nn.CrossEntropyLoss()
 
