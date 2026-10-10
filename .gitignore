@@ -1,10 +1,21 @@
 *
 
+# Junk files
+.DS_Store
+
 # Core code and data
 !data/
 !data/*
-!icicl/
-!icicl/*
+!icicl/__init__.py
+!icicl/models.py
+!icicl/operators.py
+!icicl/scaling_law_data_sweep.py
+!icicl/sweep_probabilities.py
+!icicl/train_models.py
+!icicl/train_models_noffn.py
+!icicl/train_scaling_laws.py
+!icicl/transitions.py
+!icicl/clustering.py
 !icicl/scripts/
 !icicl/scripts/*
 
