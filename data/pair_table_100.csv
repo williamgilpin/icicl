@@ -1,0 +1,101 @@
+train,test,seed,train_class,test_class,train_corr_dim,test_corr_dim
+Lorenz,Rossler,,"Dissipative, autonomous","Dissipative, autonomous",1.99,1.8
+Hadley,Rucklidge,0,"Dissipative, autonomous","Dissipative, autonomous",2.03,1.98
+Colpitts,SprottN,0,"Dissipative, autonomous","Dissipative, autonomous",1.74,1.78
+SprottM,MacArthur,0,"Dissipative, autonomous","Dissipative, autonomous",1.55,2.27
+HyperPang,SprottO,0,"Dissipative, autonomous","Dissipative, autonomous",2.41,1.71
+BickleyJet,LorenzStenflo,0,Conservative,"Dissipative, autonomous",2.0,2.12
+TurchinHanski,YuWang2,0,"Dissipative, forced","Dissipative, autonomous",1.62,1.52
+HindmarshRose,SprottK,0,"Dissipative, autonomous","Dissipative, autonomous",1.65,1.82
+CircadianRhythm,RikitakeDynamo,0,"Dissipative, forced","Dissipative, autonomous",1.63,1.91
+HyperJha,HyperCai,0,"Dissipative, autonomous","Dissipative, autonomous",2.3,2.38
+SanUmSrisuchinwong,HindmarshRose,0,"Dissipative, autonomous","Dissipative, autonomous",2.07,1.65
+WangSun,ForcedBrusselator,0,"Dissipative, autonomous","Dissipative, forced",1.78,1.62
+Torus,SprottM,0,"Dissipative, autonomous","Dissipative, autonomous",1.04,1.55
+CaTwoPlusQuasiperiodic,StickSlipOscillator,0,"Dissipative, autonomous","Dissipative, forced",1.85,1.72
+Rucklidge,BickleyJet,0,"Dissipative, autonomous",Conservative,1.98,2.0
+ThomasLabyrinth,ShimizuMorioka,0,"Dissipative, autonomous","Dissipative, autonomous",2.15,1.72
+Bouali2,SprottD,0,"Dissipative, autonomous","Dissipative, autonomous",1.93,1.95
+LorenzCoupled,SprottP,10,"Dissipative, autonomous","Dissipative, autonomous",2.4,1.99
+Dadras,CaTwoPlusQuasiperiodic,10,"Dissipative, autonomous","Dissipative, autonomous",1.61,1.85
+HyperJha,Bouali,10,"Dissipative, autonomous","Dissipative, autonomous",2.3,1.73
+Chen,ForcedFitzHughNagumo,10,"Dissipative, autonomous","Dissipative, forced",2.08,1.62
+BurkeShaw,BlinkingRotlet,10,"Dissipative, autonomous",Conservative,2.05,2.07
+Thomas,AtmosphericRegime,14,"Dissipative, autonomous","Dissipative, autonomous",1.65,1.09
+HyperBao,LidDrivenCavityFlow,14,"Dissipative, autonomous",Conservative,1.9,2.47
+CoevolvingPredatorPrey,Coullet,14,"Dissipative, autonomous","Dissipative, autonomous",1.45,2.09
+BelousovZhabotinsky,SprottC,14,"Dissipative, autonomous","Dissipative, autonomous",0.86,1.9
+RabinovichFabrikant,HyperYan,14,"Dissipative, autonomous","Dissipative, autonomous",2.08,1.72
+HyperCai,SprottL,14,"Dissipative, autonomous","Dissipative, autonomous",2.38,1.41
+HindmarshRose,Thomas,14,"Dissipative, autonomous","Dissipative, autonomous",1.65,1.65
+ChenLee,WangSun,14,"Dissipative, autonomous","Dissipative, autonomous",1.23,1.78
+SprottR,SprottTorus,14,"Dissipative, autonomous","Dissipative, autonomous",1.83,1.06
+HyperWang,KawczynskiStrizhak,14,"Dissipative, autonomous","Dissipative, autonomous",2.38,0.5
+LuChen,SprottE,14,"Dissipative, autonomous","Dissipative, autonomous",1.37,1.53
+BurkeShaw,SprottJ,14,"Dissipative, autonomous","Dissipative, autonomous",2.05,1.76
+CellularNeuralNetwork,CircadianRhythm,14,"Dissipative, autonomous","Dissipative, forced",1.78,1.63
+YuWang2,HyperQi,14,"Dissipative, autonomous","Dissipative, autonomous",1.52,2.07
+HastingsPowell,Bouali2,14,"Dissipative, autonomous","Dissipative, autonomous",1.01,1.93
+SprottF,SprottTorus,,"Dissipative, autonomous","Dissipative, autonomous",2.25,1.06
+Laser,AtmosphericRegime,47,"Dissipative, autonomous","Dissipative, autonomous",1.72,1.09
+Aizawa,NewtonLiepnik,47,"Dissipative, autonomous","Dissipative, autonomous",1.89,2.01
+SprottC,CaTwoPlusQuasiperiodic,47,"Dissipative, autonomous","Dissipative, autonomous",1.9,1.85
+KawczynskiStrizhak,ChenLee,47,"Dissipative, autonomous","Dissipative, autonomous",0.5,1.23
+ArnoldBeltramiChildress,HyperPang,47,"Dissipative, autonomous","Dissipative, autonomous",1.93,2.41
+NoseHoover,SprottH,47,"Dissipative, autonomous","Dissipative, autonomous",1.96,2.18
+HyperBao,SprottMore,47,"Dissipative, autonomous","Dissipative, autonomous",1.9,2.23
+RabinovichFabrikant,HyperXu,47,"Dissipative, autonomous","Dissipative, autonomous",2.08,2.31
+SprottE,SprottN,47,"Dissipative, autonomous","Dissipative, autonomous",1.53,1.78
+AtmosphericRegime,BlinkingRotlet,47,"Dissipative, autonomous",Conservative,1.09,2.07
+SaltonSea,HyperJha,47,"Dissipative, autonomous","Dissipative, autonomous",1.7,2.3
+BlinkingRotlet,Qi,47,Conservative,"Dissipative, autonomous",2.07,1.89
+HyperWang,OscillatingFlow,47,"Dissipative, autonomous","Dissipative, forced",2.38,2.35
+QiChen,BickleyJet,47,"Dissipative, autonomous",Conservative,1.83,2.0
+CellularNeuralNetwork,HyperRossler,47,"Dissipative, autonomous","Dissipative, autonomous",1.78,1.89
+Duffing,ArnoldWeb,47,"Dissipative, forced",Conservative,2.02,2.27
+BlinkingVortex,Lorenz,47,Conservative,"Dissipative, autonomous",2.21,1.99
+BurkeShaw,SprottP,47,"Dissipative, autonomous","Dissipative, autonomous",2.05,1.99
+Rucklidge,SprottI,47,"Dissipative, autonomous","Dissipative, autonomous",1.98,1.59
+Thomas,NuclearQuadrupole,47,"Dissipative, autonomous",Conservative,1.65,2.1
+Torus,HenonHeiles,47,"Dissipative, autonomous","Dissipative, autonomous",1.04,1.48
+CircadianRhythm,CaTwoPlus,47,"Dissipative, forced","Dissipative, autonomous",1.63,1.23
+MultiChua,Blasius,47,"Dissipative, autonomous","Dissipative, autonomous",1.75,1.69
+HyperLorenz,KawczynskiStrizhak,47,"Dissipative, autonomous","Dissipative, autonomous",2.33,0.5
+ShimizuMorioka,NoseHoover,47,"Dissipative, autonomous","Dissipative, autonomous",1.72,1.96
+NuclearQuadrupole,Bouali,49,Conservative,"Dissipative, autonomous",2.1,1.73
+ZhouChen,SwingingAtwood,49,"Dissipative, autonomous",Conservative,1.62,1.83
+AnishchenkoAstakhov,FluidTrampoline,49,"Dissipative, autonomous","Dissipative, forced",1.93,2.18
+SprottTorus,HyperYan,49,"Dissipative, autonomous","Dissipative, autonomous",1.06,1.72
+Arneodo,LuChenCheng,49,"Dissipative, autonomous","Dissipative, autonomous",1.93,1.72
+DoubleGyre,Chua,49,"Dissipative, forced","Dissipative, autonomous",2.33,1.8
+Rossler,Lorenz84,49,"Dissipative, autonomous","Dissipative, autonomous",1.8,1.87
+MooreSpiegel,CellCycle,49,"Dissipative, autonomous","Dissipative, autonomous",1.85,1.76
+SprottB,HyperQi,49,"Dissipative, autonomous","Dissipative, autonomous",1.93,2.07
+Hopfield,ArnoldWeb,49,"Dissipative, autonomous",Conservative,1.99,2.27
+Halvorsen,NewtonLiepnik,49,"Dissipative, autonomous","Dissipative, autonomous",1.88,2.01
+YuWang,GlycolyticOscillation,49,"Dissipative, autonomous","Dissipative, autonomous",1.86,1.64
+RikitakeDynamo,SprottO,49,"Dissipative, autonomous","Dissipative, autonomous",1.91,1.71
+Finance,AnishchenkoAstakhov,49,"Dissipative, autonomous","Dissipative, autonomous",1.92,1.93
+ForcedFitzHughNagumo,SprottK,49,"Dissipative, forced","Dissipative, autonomous",1.62,1.82
+OscillatingFlow,ForcedFitzHughNagumo,49,"Dissipative, forced","Dissipative, forced",2.35,1.62
+LorenzStenflo,GenesioTesi,49,"Dissipative, autonomous","Dissipative, autonomous",2.12,1.95
+HyperYan,DoublePendulum,49,"Dissipative, autonomous",Conservative,1.72,2.66
+CellCycle,LorenzBounded,49,"Dissipative, autonomous","Dissipative, autonomous",1.76,1.96
+Lorenz84,SprottP,49,"Dissipative, autonomous","Dissipative, autonomous",1.87,1.99
+BeerRNN,SprottB,49,"Dissipative, autonomous","Dissipative, autonomous",1.43,1.93
+RayleighBenard,ForcedVanDerPol,49,"Dissipative, autonomous","Dissipative, forced",1.92,1.32
+Qi,HyperYangChen,49,"Dissipative, autonomous","Dissipative, autonomous",1.89,2.44
+HyperRossler,LiuChen,49,"Dissipative, autonomous","Dissipative, autonomous",1.89,1.06
+IsothermalChemical,Coullet,49,"Dissipative, autonomous","Dissipative, autonomous",1.09,2.09
+ArnoldWeb,PehlivanWei,49,Conservative,"Dissipative, autonomous",2.27,1.72
+ForcedBrusselator,NuclearQuadrupole,49,"Dissipative, forced",Conservative,1.62,2.1
+SprottA,IsothermalChemical,49,"Dissipative, autonomous","Dissipative, autonomous",1.96,1.09
+JerkCircuit,PanXuZhou,49,"Dissipative, autonomous","Dissipative, autonomous",1.84,0.77
+DequanLi,SprottJerk,49,"Dissipative, autonomous","Dissipative, autonomous",1.93,1.14
+HyperYangChen,LidDrivenCavityFlow,49,"Dissipative, autonomous",Conservative,2.44,2.47
+Lorenz,SprottI,49,"Dissipative, autonomous","Dissipative, autonomous",1.99,1.59
+GlycolyticOscillation,ZhouChen,49,"Dissipative, autonomous","Dissipative, autonomous",1.64,1.62
+MacArthur,RikitakeDynamo,49,"Dissipative, autonomous","Dissipative, autonomous",2.27,1.91
+SprottK,GuckenheimerHolmes,49,"Dissipative, autonomous","Dissipative, autonomous",1.82,2.07
+PanXuZhou,Halvorsen,49,"Dissipative, autonomous","Dissipative, autonomous",0.77,1.88
+ExcitableCell,Sakarya,49,"Dissipative, autonomous","Dissipative, autonomous",0.19,2.06
