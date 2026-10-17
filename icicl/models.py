@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Tuple, Optional, Dict
 import math
 
-import math, pickle, torch
+import math, pickle, torch, warnings
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
@@ -496,6 +496,8 @@ class TinyCausalLM(nn.Module):
                  pos_mode: str = "alibi", alibi_slope: float = 1.0, ablate_ffn: bool = False):
         super().__init__()
         self.block_size = block_size
+        self.alibi_slope = alibi_slope
+        self.ablate_ffn = ablate_ffn
         self.tok_emb = nn.Embedding(vocab_size, d_model)
 
         self.use_abs = (pos_mode == "abs")
@@ -508,11 +510,13 @@ class TinyCausalLM(nn.Module):
                 d_model=d_model,
                 d_k=d_k,
                 pos_mode=pos_mode,
+                alibi_slope=alibi_slope,
             )
             self.attn2 = AttentionOnlyCausalBlock(
                 d_model=d_model,
                 d_k=d_k,
                 pos_mode=pos_mode,
+                alibi_slope=alibi_slope,
             )
         else:
             self.attn1 = SingleHeadCausalAttention(
@@ -670,6 +674,8 @@ def _pack_config_from(model: TinyCausalLM) -> dict:
         "d_k": model.attn1.q.out_features,
         "block_size": model.block_size,
         "pos_mode": model.attn1.pos_mode,  # propagated to both blocks
+        "alibi_slope": model.alibi_slope,
+        "ablate_ffn": model.ablate_ffn,
     }
 
 def batched_forward(model, X, batch_size=1000):
@@ -705,25 +711,53 @@ def save_checkpoint(path: str, model: TinyCausalLM, optimizer: torch.optim.Optim
     ckpt.update(extra)
     torch.save(ckpt, path)
 
-def load_model(path: str, device: str | torch.device = "cpu") -> TinyCausalLM:
+def _model_from_checkpoint(ckpt: dict, device: str | torch.device, alibi_slope: float | None = None) -> TinyCausalLM:
+    """Build a TinyCausalLM from a checkpoint dict, filling in settings that older
+    checkpoints did not record."""
+    config = dict(ckpt["config"])
+    # The FFN ablation is visible in the weights. The ALiBi slope is not learned, so a
+    # checkpoint that did not record it can only be loaded correctly if it is passed in.
+    config.setdefault("ablate_ffn", "attn1.ffn.0.weight" not in ckpt["state_dict"])
+    if alibi_slope is not None:
+        saved = config.get("alibi_slope")
+        if saved is not None and saved != alibi_slope:
+            warnings.warn(f"Overriding the checkpoint's ALiBi slope {saved} with {alibi_slope}")
+        config["alibi_slope"] = alibi_slope
+    m = TinyCausalLM(**config).to(device)
+    m.load_state_dict(ckpt["state_dict"])
+    return m
+
+def load_model(path: str, device: str | torch.device = "cpu", alibi_slope: float | None = None) -> TinyCausalLM:
+    """Load a TinyCausalLM checkpoint for evaluation.
+
+    Args:
+        path: The path to the checkpoint.
+        device: The device to load the model onto.
+        alibi_slope: The ALiBi slope the model was trained with. Checkpoints saved
+            after the slope became configurable record it, so this is only needed for
+            older checkpoints trained with a non-default slope (which otherwise load
+            with the default of 1.0). If given, it overrides the recorded value.
+
+    Returns:
+        A TinyCausalLM in eval mode.
+    """
     try:
         ckpt = torch.load(path, map_location=device, weights_only=True)
     except pickle.UnpicklingError:
         ckpt = torch.load(path, map_location=device, weights_only=False)
 
-    m = TinyCausalLM(**ckpt["config"]).to(device)
-    m.load_state_dict(ckpt["state_dict"])
+    m = _model_from_checkpoint(ckpt, device, alibi_slope)
     m.eval()
     return m
 
-def load_for_training(path: str, device: str | torch.device, lr: float, weight_decay: float = 0.0):
+def load_for_training(path: str, device: str | torch.device, lr: float, weight_decay: float = 0.0,
+                      alibi_slope: float | None = None):
     try:
         ckpt = torch.load(path, map_location=device, weights_only=True)
     except pickle.UnpicklingError:
         ckpt = torch.load(path, map_location=device, weights_only=False)
 
-    m = TinyCausalLM(**ckpt["config"]).to(device)
-    m.load_state_dict(ckpt["state_dict"])
+    m = _model_from_checkpoint(ckpt, device, alibi_slope)
     opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=weight_decay)
     if "optim" in ckpt:
         opt.load_state_dict(ckpt["optim"])
