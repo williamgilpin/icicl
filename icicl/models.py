@@ -489,14 +489,17 @@ class TinyCausalLM(nn.Module):
             "abs"   -> optional learned GPT-2-style absolute embeddings added to x
             "onehot" -> one-hot absolute positions (concat then project)
         alibi_slope (float): Slope for ALiBi bias; ignored if pos_mode != "alibi".
+        alibi_slope2 (float, optional): ALiBi slope of the second layer. Defaults to alibi_slope.
         ablate_ffn (bool): If True, removes the feedforward sublayer for an 
             attention-only block.
     """
     def __init__(self, vocab_size: int, d_model: int = 256, d_k: int = 128, block_size: int = 512,
-                 pos_mode: str = "alibi", alibi_slope: float = 1.0, ablate_ffn: bool = False):
+                 pos_mode: str = "alibi", alibi_slope: float = 1.0, ablate_ffn: bool = False,
+                 alibi_slope2: float | None = None):
         super().__init__()
         self.block_size = block_size
         self.alibi_slope = alibi_slope
+        self.alibi_slope2 = alibi_slope if alibi_slope2 is None else alibi_slope2
         self.ablate_ffn = ablate_ffn
         self.tok_emb = nn.Embedding(vocab_size, d_model)
 
@@ -516,14 +519,14 @@ class TinyCausalLM(nn.Module):
                 d_model=d_model,
                 d_k=d_k,
                 pos_mode=pos_mode,
-                alibi_slope=alibi_slope,
+                alibi_slope=self.alibi_slope2,
             )
         else:
             self.attn1 = SingleHeadCausalAttention(
                 d_model, d_k, pos_mode=pos_mode, alibi_slope=alibi_slope
             )
             self.attn2 = SingleHeadCausalAttention(
-                d_model, d_k, pos_mode=pos_mode, alibi_slope=alibi_slope
+                d_model, d_k, pos_mode=pos_mode, alibi_slope=self.alibi_slope2
             )
         self.ln_f = nn.LayerNorm(d_model)
         self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
@@ -675,6 +678,7 @@ def _pack_config_from(model: TinyCausalLM) -> dict:
         "block_size": model.block_size,
         "pos_mode": model.attn1.pos_mode,  # propagated to both blocks
         "alibi_slope": model.alibi_slope,
+        "alibi_slope2": getattr(model.attn2, "alibi_slope", model.alibi_slope2),
         "ablate_ffn": model.ablate_ffn,
     }
 
@@ -718,6 +722,7 @@ def _model_from_checkpoint(ckpt: dict, device: str | torch.device, alibi_slope: 
     # The FFN ablation is visible in the weights. The ALiBi slope is not learned, so a
     # checkpoint that did not record it can only be loaded correctly if it is passed in.
     config.setdefault("ablate_ffn", "attn1.ffn.0.weight" not in ckpt["state_dict"])
+    config.setdefault("alibi_slope2", ckpt.get("args", {}).get("slope2"))
     if alibi_slope is not None:
         saved = config.get("alibi_slope")
         if saved is not None and saved != alibi_slope:
