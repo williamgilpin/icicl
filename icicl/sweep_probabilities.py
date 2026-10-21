@@ -1,14 +1,18 @@
-import glob
+import csv
 import os
+import glob
 import numpy as np
 import torch
 import torch.nn.functional as F
 
 from scipy.spatial.distance import cdist
 from scipy.stats import spearmanr, entropy
-from .transitions import transition_probs_mc, transition_probs2, transition_probs_mc_greedy_one_step
-from .operators import SymbolicMarkovChain, invariant_distribution, reduce_markov_chain
+from .transitions import transition_probs_mc
+from .operators import SymbolicMarkovChain, invariant_distribution
 from .models import load_model
+
+## Set to True to evaluate the train/test pairs and seeds listed in data/pair_table_100.csv
+REPLICATE = False
 
 order = 8
 
@@ -19,9 +23,9 @@ VOCAB_SIZE = 100
 # N_TEST = 1000
 CONTEXT_LENGTH = 32*4
 
-# all_system_folders = glob.glob("./private_data/training_run/*/")
-all_model_paths = glob.glob("./private_data/training_run/*/tiny_lm_*.pt")
-all_data_paths = glob.glob("./private_data/training_run/*/*.pkl")
+# all_system_folders = glob.glob("./local_data/training_run/*/")
+all_model_paths = glob.glob("./local_data/training_run/*/tiny_lm_*.pt")
+all_data_paths = glob.glob("./local_data/training_run/*/*.pkl")
 all_data_paths_large = []
 for data_path in all_data_paths:
     traj_test_out = np.load(data_path, allow_pickle=True)
@@ -30,15 +34,33 @@ for data_path in all_data_paths:
 all_data_paths_large = np.array(all_data_paths_large)
 all_model_paths = np.array(all_model_paths)
 
-# np.random.seed(1)
-np.random.seed(0)
-for _ in range(50):
+if REPLICATE:
+    pair_table = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "pair_table_100.csv")
+    with open(pair_table) as f:
+        rows = list(csv.DictReader(f))
+    jobs = []
+    for row in rows:
+        found = glob.glob(f"./local_data/training_run/{row['train']}_{row['test']}/tiny_lm_*.pt")
+        if not found:
+            print(f"No trained model for {row['train']}_{row['test']}, skipping", flush=True)
+            continue
+        jobs.append((found[0], int(float(row["seed"])) if row["seed"] else 0))
+else:
+    # np.random.seed(1)
+    np.random.seed(0)
+    jobs = [None] * 50
 
-    model_path = np.random.choice(all_model_paths, size=1, replace=False)[0]
-    data_path = np.random.choice(all_data_paths_large, size=1, replace=False)[0]
-    loss_path = glob.glob(os.path.dirname(data_path) + "/losses_*.npz")[0]
+for job in jobs:
+
+    if job is None:
+        model_path = np.random.choice(all_model_paths, size=1, replace=False)[0]
+    else:
+        model_path, seed = job
+        np.random.seed(seed)
+        torch.manual_seed(seed)
     eq_name = model_path.split("/")[-1].split("_")[4]
     eq_name_downstream = model_path.split("/")[-1].split("_")[5].split(".")[0]
+    data_path = os.path.join(os.path.dirname(model_path), f"traj_{eq_name_downstream}.pkl")
     eq_name_target = data_path.split("/")[-1].split(".")[0].split("_")[1]
     ## Skip the same train/test pair
     if eq_name_target == eq_name:
@@ -47,10 +69,6 @@ for _ in range(50):
     print(overall_name, flush=True)
 
     model = load_model(model_path, device=device)
-
-    ## Load the losses
-    losses = np.load(loss_path, allow_pickle=True)
-    losses, val_losses, val_losses_ood = losses.T 
 
     ## Make the test data and tokenize it
     traj_test_out = np.load(data_path, allow_pickle=True)
@@ -97,7 +115,7 @@ for _ in range(50):
     all_spearman, all_kldiv = [], []
     all_all_eig_spearman = []
     all_entropy_true_invariant, all_entropy_model_invariant, all_entropy_model_empirical = [], [], []
-    model_paths = sorted(glob.glob("../private_data/training_run/ckpt_*.pt"))
+    model_paths = sorted(glob.glob(os.path.join(os.path.dirname(model_path), "ckpt_*.pt")))
     for model_path in model_paths:
         print(f"Evaluating {model_path}", flush=True)
         model = load_model(model_path, device="cpu")
@@ -173,11 +191,10 @@ for _ in range(50):
 
 
     all_all_eig_spearman = np.array(all_all_eig_spearman)
-    np.array(all_all_eig_spearman).dump(f"private_data/eig_spearman_{overall_name}2.pkl")
-    np.array(all_spearman).dump(f"private_data/invariant_spearman_{overall_name}2.pkl")
-    np.array(all_kldiv).dump(f"private_data/invariant_kldiv_{overall_name}2.pkl")
-    np.array(val_losses_ood).dump(f"private_data/val_losses_ood_{overall_name}2.pkl")
-    np.array(all_entropy_true_invariant).dump(f"private_data/entropy_true_invariant_{overall_name}2.pkl")
-    np.array(all_entropy_model_invariant).dump(f"private_data/entropy_model_invariant_{overall_name}2.pkl")
-    np.array(all_entropy_model_empirical).dump(f"private_data/entropy_model_empirical_{overall_name}2.pkl")
+    np.array(all_all_eig_spearman).dump(f"local_data/eig_spearman_{overall_name}2.pkl")
+    np.array(all_spearman).dump(f"local_data/invariant_spearman_{overall_name}2.pkl")
+    np.array(all_kldiv).dump(f"local_data/invariant_kldiv_{overall_name}2.pkl")
+    np.array(all_entropy_true_invariant).dump(f"local_data/entropy_true_invariant_{overall_name}2.pkl")
+    np.array(all_entropy_model_invariant).dump(f"local_data/entropy_model_invariant_{overall_name}2.pkl")
+    np.array(all_entropy_model_empirical).dump(f"local_data/entropy_model_empirical_{overall_name}2.pkl")
 

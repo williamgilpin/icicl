@@ -1,32 +1,37 @@
 *
 
-# Junk files
-.DS_Store
-
-# Core code and data
+# Whitelist core code and data
 !data/
 !data/*
+# Re-include the icicl/ directory itself; its files stay ignored by "*" unless listed below
+!icicl/
 !icicl/__init__.py
 !icicl/models.py
 !icicl/operators.py
 !icicl/scaling_law_data_sweep.py
 !icicl/sweep_probabilities.py
 !icicl/train_models.py
-!icicl/train_models_noffn.py
 !icicl/train_scaling_laws.py
 !icicl/transitions.py
 !icicl/clustering.py
 !icicl/scripts/
-!icicl/scripts/*
+!icicl/scripts/ablate_ffn.sbatch
+!icicl/scripts/scaling.sbatch
+!icicl/scripts/scaling_data.sbatch
 
-# Documentation and configuration files
-!*.md
+# Whitelist documentation and configuration files
 !README.md
+!icicl/EXPERIMENTS.md
 !uv.lock
 !.gitignore
 !pyproject.toml
 
-# Demo notebooks
+# Whitelist demo notebooks
 !train_single_model.ipynb
 !measure_embedding_dimension.ipynb
 !estimate_transfer_operator.ipynb
+
+# Blacklist junk and temporary files
+.DS_Store
+local_*
+

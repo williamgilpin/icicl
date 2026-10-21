@@ -580,6 +580,7 @@ def train_next_token(
     save_path: str = None,
     cadence: int = 1000,
     ablate_ffn: bool = False,
+    alibi_slope2: float | None = 0.0,
 ):
     """
     Train a tiny causal language model to predict the next token in a sequence.
@@ -601,6 +602,7 @@ def train_next_token(
         save_path: The path to save the checkpoint.
         cadence: If saving, the number of steps between checkpoints.
         ablate_ffn: If True, uses attention-only blocks with no feedforward sublayer.
+        alibi_slope2: The ALiBi slope of the second layer. If None, uses alibi_slope.
 
     Returns:
         A TinyCausalLM model.
@@ -614,7 +616,7 @@ def train_next_token(
     dl_val_ood = DataLoader(StreamWindows(tokens_test_out, block_size), batch_size=batch_size, shuffle=False, num_workers=0, drop_last=True)
     it = iter(dl_train)
 
-    model = TinyCausalLM(vocab_size, d_model=d_model, d_k=d_k, block_size=block_size, ablate_ffn=ablate_ffn, alibi_slope=alibi_slope).to(device)
+    model = TinyCausalLM(vocab_size, d_model=d_model, d_k=d_k, block_size=block_size, ablate_ffn=ablate_ffn, alibi_slope=alibi_slope, alibi_slope2=alibi_slope2).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = nn.CrossEntropyLoss()
 

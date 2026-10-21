@@ -1,6 +1,8 @@
+import csv
 import numpy as np
-import glob
 import os
+
+REPLICATE = False
 
 VOCAB_SIZE = 100
 N_TRAIN = 2*40_000
@@ -22,20 +24,29 @@ from models import save_checkpoint
 all_attractors = get_attractor_list(sys_class="continuous_no_delay")
 
 ## Only train on models not seen before
-# all_model_paths = glob.glob("./private_data/tiny_lm_*.pt")
+# all_model_paths = glob.glob("./local_data/tiny_lm_*.pt")
 # all_model_paths = [item for item in all_model_paths if len(item.split("_")) > 5]
 # seen_models = [item.split("_")[5] for item in all_model_paths]
 # all_attractors = [item for item in all_attractors if item not in seen_models]
 
-np.random.seed(89)
-num_systems = len(all_attractors)
-training_systems = np.random.choice(all_attractors, size=num_systems, replace=False)
-test_systems = np.random.choice(all_attractors, size=num_systems, replace=False)
-print(training_systems)
-print(test_systems)
+if REPLICATE:
+    pair_table = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "pair_table_100.csv")
+    with open(pair_table) as f:
+        pairs = [(row["train"], row["test"], int(float(row["seed"])) if row["seed"] else 89)
+                 for row in csv.DictReader(f)]
+else:
+    np.random.seed(89)
+    num_systems = len(all_attractors)
+    training_systems = np.random.choice(all_attractors, size=num_systems, replace=False)
+    test_systems = np.random.choice(all_attractors, size=num_systems, replace=False)
+    print(training_systems)
+    print(test_systems)
+    pairs = [(train_name, test_name, None) for train_name, test_name in zip(training_systems, test_systems)]
 
-for train_name, test_name in zip(training_systems, test_systems):
-    
+for train_name, test_name, seed in pairs:
+    if seed is not None:
+        np.random.seed(seed)
+
     if train_name == test_name:
         print(f"Skipping {train_name} == {test_name}", flush=True)
         continue
@@ -51,7 +62,7 @@ for train_name, test_name in zip(training_systems, test_systems):
     print(train_name, test_name, flush=True)
     ## Make a new subfolder for the training run, unless it already exists
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    subfolder = os.path.join(current_dir, f"../private_data/training_run/{train_name}_{test_name}")
+    subfolder = os.path.join(current_dir, f"../local_data/training_run/{train_name}_{test_name}")
     if not os.path.exists(subfolder):
         os.makedirs(subfolder)
     else:
@@ -74,7 +85,6 @@ for train_name, test_name in zip(training_systems, test_systems):
     if traj_test is None:
         print(f"Skipping {train_name}, {test_name}", flush=True)
         continue
-    traj_test.dump(os.path.join(subfolder, f"traj_{test_name}.pkl"))
     x_test = traj_test[:, 0]
     tok_test, aux = tokenizer.encode_series(x_test, 100, 10)
 
