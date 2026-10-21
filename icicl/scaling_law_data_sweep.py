@@ -7,26 +7,28 @@ tokenizes the first state variable with `ChronosTokenizer`, trains models across
 multiple amounts of pretraining data at fixed context length 128, and saves
 checkpoints, losses, forecast metrics, trajectories, and run metadata.
 
-By default, ./private_data/scaling_law_data_vocab{vocab_size} is used as the root
+By default, ./local_data/scaling_law_data_vocab{vocab_size} is used as the root
 directory for all runs, and all available train/test pairs are sampled. Each pair is
 trained with logarithmically spaced training-token counts up to `--n-train`.
 
 ### Basic usage
 
 ```bash
-python scaling_law_data_sweep.py
+uv run icicl/scaling_law_data_sweep.py
 ```
 
 Run with custom seed and training-token counts
 ```
-python scaling_law_data_sweep.py --seed 42 --train-sizes 256 1024 4096 80000 --vocab-size 20
+uv run icicl/scaling_law_data_sweep.py --seed 42 --train-sizes 256 1024 4096 80000 --vocab-size 20
 ```
 
 """
 
 import argparse
+import csv
 import datetime
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +52,8 @@ except ModuleNotFoundError:
     )
 
 
+REPLICATE = False
+
 VOCAB_SIZE = 100
 N_TRAIN = 2 * 40_000
 N_TEST = 3_000
@@ -67,7 +71,6 @@ DEFAULT_SEED = 2
 DEFAULT_TORCH_SEED = DEFAULT_SEED
 DEFAULT_PTS_PER_PERIOD = 30
 
-from pathlib import Path
 def check_for_existing_traj_files(traj_name, min_len=None):
     """
     Given a trajectory name, check for existing trajectory files in the current 
@@ -164,7 +167,7 @@ def parse_args():
     )
     args = parser.parse_args()
     if args.base_path is None:
-        args.base_path = Path(f"./private_data/scaling_law_data_vocab{args.vocab_size}")
+        args.base_path = Path(f"./local_data/scaling_law_data_vocab{args.vocab_size}")
     return args
 
 
@@ -442,7 +445,17 @@ def main():
     args = parse_args()
     args.base_path.mkdir(parents=True, exist_ok=True)
 
-    for train_name, test_name in sample_system_pairs(args.num_pairs, args.seed):
+    if REPLICATE:
+        pair_table = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "pair_table_100.csv")
+        with open(pair_table) as f:
+            pairs = [(row["train"], row["test"], int(float(row["seed"])) if row["seed"] else DEFAULT_SEED)
+                     for row in csv.DictReader(f)]
+    else:
+        pairs = [(train_name, test_name, args.seed)
+                 for train_name, test_name in sample_system_pairs(args.num_pairs, args.seed)]
+
+    for train_name, test_name, seed in pairs:
+        args.seed = seed
         skip_reason = should_skip_pair(train_name, test_name)
         if skip_reason is not None:
             print(skip_reason, flush=True)
