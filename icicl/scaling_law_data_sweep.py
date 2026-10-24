@@ -70,6 +70,7 @@ DEFAULT_CADENCE = 1000
 DEFAULT_SEED = 2
 DEFAULT_TORCH_SEED = DEFAULT_SEED
 DEFAULT_PTS_PER_PERIOD = 30
+ZHANG_BATCH_EXPONENT = 0.47
 
 def check_for_existing_traj_files(traj_name, min_len=None):
     """
@@ -164,6 +165,11 @@ def parse_args():
         "--overwrite",
         action="store_true",
         help="Retrain data-size sweep points even if a final checkpoint already exists.",
+    )
+    parser.add_argument(
+        "--zhang-scaling",
+        action="store_true",
+        help="Scale the batch size with the number of training tokens (Zhang et al. 2025).",
     )
     args = parser.parse_args()
     if args.base_path is None:
@@ -303,6 +309,7 @@ def save_pair_metadata(pair_dir, train_name, test_name, args, train_sizes):
         "cadence": args.cadence,
         "horizon": args.horizon,
         "pts_per_period": args.pts_per_period,
+        "zhang_scaling": args.zhang_scaling,
         "seed": args.seed,
         "torch_seed": args.torch_seed,
         "context_length": int(args.context_length),
@@ -389,8 +396,16 @@ def train_data_size(train_dir, train_size, datasets, args):
         )
         return
 
+    batch_size = args.batch_size
+    if args.zhang_scaling:
+        frac = train_size / len(datasets["tok_train"])
+        batch_size = max(1, round(args.batch_size * frac ** ZHANG_BATCH_EXPONENT))
+
     train_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Training with n_train {train_size} at context length {context_length}", flush=True)
+    print(
+        f"Training with n_train {train_size} at context length {context_length}, batch size {batch_size}",
+        flush=True,
+    )
 
     torch.manual_seed(args.torch_seed)
     tokens_train = torch.tensor(datasets["tok_train"][:train_size], dtype=torch.long)
@@ -404,7 +419,7 @@ def train_data_size(train_dir, train_size, datasets, args):
         vocab_size=1 + args.vocab_size,
         block_size=context_length,
         lr=args.lr,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         steps=args.steps,
         d_model=args.d_model,
         d_k=args.d_k,
